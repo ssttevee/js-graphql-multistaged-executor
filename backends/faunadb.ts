@@ -7,8 +7,7 @@ import {
 } from "graphql";
 import { addPath, Path, pathToArray } from "graphql/jsutils/Path";
 
-import type { ExecutorBackend } from "../executor";
-import { WrappedValue } from "../executor";
+import type { ExecutorBackend, WrappedValue } from "../executor";
 
 const wrapped = Symbol("is wrapped");
 const original = Symbol("get original");
