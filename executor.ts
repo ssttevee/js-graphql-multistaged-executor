@@ -655,7 +655,7 @@ export function createExecuteFn<TDeferred>(
           throw new Error('Expected parent');
         }
 
-        parent[0][parent[1]] = serialize(await value);
+        parent[0][parent[1]] = await serialize(await value);
       }
 
       const result: ExecutionResult<T> = { data: resultData as T };
