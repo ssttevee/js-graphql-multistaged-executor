@@ -64,10 +64,8 @@ export default function createExecutorBackend(
       return value instanceof Expr;
     },
     wrapSourceValue,
-    isWrappedValue: (value: unknown): value is WrappedValue =>
-      Boolean((value as any)?.[wrapped]),
-    unwrapResolvedValue: (value) =>
-      ((value as any)?.[wrapped] && (value as any)[original]) || value,
+    isWrappedValue: (value: any): value is WrappedValue<any> => Boolean(value?.[wrapped]),
+    unwrapResolvedValue: (value: any) => (value?.[wrapped] && value[original]) || value,
     expandChildren: (
       path: Path,
       returnType: GraphQLOutputType,

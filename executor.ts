@@ -27,13 +27,11 @@ import { extractOperationAndFragments } from "./ast";
 import { FragmentDefinitionMap, selectionFields } from "./selection";
 import { resolveArguments } from "./arguments";
 
-export type WrappedValue<
-  T extends Record<string, unknown> = Record<string, unknown>,
-> = PromiseLike<T> & {
-  [key: string]: T[keyof T] extends Record<string, unknown>
-    ? WrappedValue<T[keyof T]>
-    : Record<never, unknown>;
-};
+export type WrappedValue<T> = PromiseLike<T> & (
+  T extends Array<infer E> ? Array<WrappedValue<E>> :
+  T extends object ? { [P in keyof T]-?: WrappedValue<T[P]> } :
+  unknown
+);
 
 export interface ExpandedChild {
   fieldNode: FieldNode;
@@ -43,12 +41,12 @@ export interface ExpandedChild {
 }
 
 export interface ExecutorBackend<TDeferred> {
-  unwrapResolvedValue: (value: WrappedValue) => unknown;
-  isWrappedValue: (value: unknown) => value is WrappedValue;
+  unwrapResolvedValue: (value: WrappedValue<any>) => unknown;
+  isWrappedValue: (value: unknown) => value is WrappedValue<any>;
   wrapSourceValue(
     sourceValue: unknown,
     getValue: () => Promise<unknown>,
-  ): WrappedValue;
+  ): WrappedValue<any>;
   isDeferredValue(value: unknown): value is TDeferred;
   resolveDeferredValues(values: TDeferred[]): Promise<unknown[]>;
   expandChildren(
