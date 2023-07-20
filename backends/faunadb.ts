@@ -9,8 +9,34 @@ import { addPath, Path, pathToArray } from "graphql/jsutils/Path";
 
 import type { ExecutorBackend, WrappedValue } from "../executor";
 
+function isExpr(e: any) {
+  return (
+      e instanceof Expr ||
+      Object.prototype.hasOwnProperty.call(e, '_isFaunaExpr')
+  )
+}
+
 const wrapped = Symbol("is wrapped");
 const original = Symbol("get original");
+const isWrappedValue = (value: any): value is WrappedValue<any> => Boolean(value?.[wrapped]);
+
+async function unwrapResolvedValue(expr: any) {
+  expr = (expr as any)?.[wrapped] ? (expr as any)[original] : expr;
+
+  if (isExpr(expr)) {
+      expr.raw = await unwrapResolvedValue(expr.raw);
+  } else if (Array.isArray(expr)) {
+      for (let [i, result] of (await Promise.all(expr.map(unwrapResolvedValue))).entries()) {
+          expr[i] = result;
+      };
+  } else if (expr instanceof Object) {
+      for (let [k, v] of (await Promise.all(Object.entries(expr).map(async ([k, v]) => [k, await unwrapResolvedValue(v)])))) {
+          expr[k] = v;
+      }
+  }
+
+  return expr;
+}
 
 export default function createExecutorBackend(
   opts?: ClientConfig,
@@ -63,8 +89,8 @@ export default function createExecutorBackend(
       return value instanceof Expr;
     },
     wrapSourceValue,
-    isWrappedValue: (value: any): value is WrappedValue<any> => Boolean(value?.[wrapped]),
-    unwrapResolvedValue: (value: any) => (value?.[wrapped] && value[original]) || value,
+    isWrappedValue,
+    unwrapResolvedValue,
     expandChildren: (
       path: Path,
       returnType: GraphQLOutputType,
