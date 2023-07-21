@@ -10,7 +10,7 @@ import { addPath, Path, pathToArray } from "graphql/jsutils/Path";
 import type { ExecutorBackend, WrappedValue } from "../executor";
 
 function isExpr(e: any) {
-  return (
+  return e && (
       e instanceof Expr ||
       Object.prototype.hasOwnProperty.call(e, '_isFaunaExpr')
   )
