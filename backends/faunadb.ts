@@ -58,11 +58,16 @@ export default function createExecutorBackend(
         }
 
         if (prop === original) {
-          return target;
+          return sourceValue;
         }
 
-        if (typeof prop === "symbol") {
-          return Reflect.get(target, prop);
+        if (typeof prop === "symbol" || prop === "toJSON") {
+          let v = Reflect.get(sourceValue, prop);
+          if (typeof v === 'function') {
+            v = v.bind(sourceValue);
+          }
+
+          return v;
         }
 
         if (prop === "then") {
@@ -71,7 +76,7 @@ export default function createExecutorBackend(
         }
 
         return wrapSourceValue(
-          Select(prop, target, null),
+          Select(prop, sourceValue, null),
           async () => Reflect.get(await getValue() as any, prop),
         );
       },
