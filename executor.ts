@@ -316,7 +316,7 @@ export function createExecuteFn<TDeferred>(
             }
 
             try {
-              let fieldValue = await resolveField(
+              let fieldValue = resolveField(
                 sourceValue,
                 resolveArguments(
                   ctx.variableValues,
@@ -335,9 +335,12 @@ export function createExecuteFn<TDeferred>(
                   fieldDef.type,
                 ),
               );
+
               if (backend.isWrappedValue(fieldValue)) {
                 fieldValue = backend.unwrapResolvedValue(fieldValue);
               }
+
+              fieldValue = await fieldValue;
 
               // console.log('step1_resolve: send to step2_discriminate', pathToArray(path), fieldValue);
               step2_discriminate.push({ fieldNode, fieldNodes, fieldValue, fieldType: fieldDef.type, parentType, path, deferral });
