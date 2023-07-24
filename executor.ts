@@ -486,7 +486,7 @@ export function createExecuteFn<TDeferred>(
   
               continue;
             } else {
-              if (Array.isArray(fieldValue)) {
+              if (Array.isArray(fieldValue) && !(fieldType instanceof GraphQLScalarType)) {
                 resultErrors.push(new GraphQLError(
                   `Cannot return list value for non-list field`,
                   {
