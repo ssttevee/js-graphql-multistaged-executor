@@ -302,7 +302,8 @@ export function createExecuteFn<TDeferred>(
         while (step1_resolve.length || step2_discriminate.length || step3_validate.length) {
           while (step1_resolve.length) {
             const { fieldNode, fieldNodes, prevPath, parentType, sourceValue: originalSourceValue, deferral } = step1_resolve.shift()!;
-            const path = addPath(prevPath, fieldNodeKey(fieldNode), parentType.name);
+            const fieldKey = fieldNodeKey(fieldNode);
+            const path = addPath(prevPath, fieldKey, parentType.name);
             const fieldDef = parentType.getFields()[fieldNode.name.value];
             const resolveField = fieldDef.resolve ?? args.fieldResolver ?? defaultFieldResolver;
 
@@ -357,12 +358,13 @@ export function createExecuteFn<TDeferred>(
             }
 
             // console.log('step1_resolve: send to step4_restage', pathToArray(prevPath), fieldValue);
+            deferral.set(sourceValue);
             step4_restage.push({
               fieldNode,
               fieldNodes,
               parentType,
               prevPath,
-              deferredPath: deferral.path,
+              deferredPath: [...deferral.path, fieldKey],
             });
           }
 
