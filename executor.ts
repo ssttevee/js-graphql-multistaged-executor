@@ -179,8 +179,13 @@ function selectFromObject(obj: any, path: Array<string | number>): any {
 }
 
 function expandFromObject(obj: any, deferredPath: Array<string | number>, path: Path | undefined): Array<{ path: Path; value: any }> {
-  const indexPlaceholderPos = deferredPath.indexOf('[]');
-  if (indexPlaceholderPos === -1) {
+  const arrayCountFromDeferred = deferredPath.filter((p) => p === '[]').length;
+  const arrayCountFromPath = pathToArray(path).filter((p) => p === '[]').length;
+  if (arrayCountFromPath !== arrayCountFromDeferred) {
+    throw new Error('expandFromObject: arraysFromPath !== arraysFromDeferred');
+  }
+
+  if (!arrayCountFromDeferred) {
     if (!path) {
       throw new Error('expandFromObject: path is undefined');
     }
@@ -190,21 +195,28 @@ function expandFromObject(obj: any, deferredPath: Array<string | number>, path: 
 
   let pathPrefix = path;
   let pathSuffix: Path | undefined;
-  for (let i = 0; i < deferredPath.length - indexPlaceholderPos - 1; i++) {
-    if (!pathPrefix) {
-      throw new Error('expandFromObject: path is too short');
+  for (let i = 0; i < arrayCountFromPath; i++) {
+    if (pathSuffix) {
+      pathSuffix = addPath(pathSuffix, '[]', undefined);
     }
 
-    pathSuffix = addPath(pathSuffix, pathPrefix.key, pathPrefix.typename);
+    while (true) {
+      if (!pathPrefix) {
+        throw new Error('expandFromObject: path is too short');
+      }
+
+      if (pathPrefix.key === '[]') {
+        break;
+      }
+
+      pathSuffix = addPath(pathSuffix, pathPrefix.key, pathPrefix.typename);
+      pathPrefix = pathPrefix.prev;
+    }
+
     pathPrefix = pathPrefix.prev;
   }
 
-  if (pathPrefix?.key !== '[]') {
-    throw new Error("expandFromObject: pathPrefix.key !== '[]'");
-  }
-
-  pathPrefix = pathPrefix.prev;
-
+  const indexPlaceholderPos = deferredPath.indexOf('[]');
   const arrayValue = selectFromObject(obj, deferredPath.slice(0, indexPlaceholderPos));
   if (!Array.isArray(arrayValue)) {
     throw new Error("expandFromObject: !Array.isArray(arrayValue)");
