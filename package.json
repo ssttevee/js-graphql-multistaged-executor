@@ -18,6 +18,7 @@
     "clean": "rm -f lib.cjs lib.d.ts lib.mjs backends/*.cjs backends/*.d.ts backends/*.mjs",
     "prepack": "npm run clean && npm run build",
     "build": "rollup -c",
+    "pretest": "npm run clean",
     "test": "jest"
   },
   "devDependencies": {
