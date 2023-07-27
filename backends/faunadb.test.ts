@@ -1,7 +1,7 @@
 import { expect, test, beforeAll, afterAll } from '@jest/globals';
 import { exec } from "child_process";
 import { Concat, Map, Lambda, Var } from "faunadb";
-import { GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLScalarType, GraphQLSchema, GraphQLString, parse } from "graphql";
+import { GraphQLEnumType, GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLScalarType, GraphQLSchema, GraphQLString, parse } from "graphql";
 import { promisify } from "util";
 
 import { createExecuteFn } from "../executor";
@@ -15,6 +15,14 @@ const JSONStringType = new GraphQLScalarType({
   },
   parseValue: (value) => typeof value === "string" ? JSON.parse(value) : value,
 });
+
+const BooleanEnumType = new GraphQLEnumType({
+  name: "BooleanEnum",
+  values: {
+    TRUE: { value: true },
+    FALSE: { value: false },
+  },
+})
 
 const WrappedStringType = new GraphQLObjectType({
   name: "WrappedString",
@@ -53,6 +61,14 @@ const WrappedStringType = new GraphQLObjectType({
 const QueryType = new GraphQLObjectType({
   name: "Query",
   fields: () => ({
+    true: {
+      type: BooleanEnumType,
+      resolve: () => true,
+    },
+    false: {
+      type: BooleanEnumType,
+      resolve: () => false,
+    },
     hello: {
       type: GraphQLString,
       args: {
@@ -229,6 +245,48 @@ afterAll(async () => {
   if (containerId) {
     await promisify(exec)("docker stop " + containerId);
   }
+});
+
+test("true", async () => {
+  const result = await execute({
+    schema,
+    document: parse(
+      `query { true }`,
+    ),
+    rootValue: null,
+  });
+  if (result.errors?.length) {
+    for (const err of result.errors) {
+      throw err.originalError ?? err;
+    }
+  }
+
+  expect(result).toEqual({
+    data: {
+      true: "TRUE",
+    },
+  });
+});
+
+test("false", async () => {
+  const result = await execute({
+    schema,
+    document: parse(
+      `query { false }`,
+    ),
+    rootValue: null,
+  });
+  if (result.errors?.length) {
+    for (const err of result.errors) {
+      throw err.originalError ?? err;
+    }
+  }
+
+  expect(result).toEqual({
+    data: {
+      false: "FALSE",
+    },
+  });
 });
 
 test("hello", async () => {

@@ -515,7 +515,7 @@ export function createExecuteFn<TDeferred>(
             }
   
             if (fieldType instanceof GraphQLScalarType || fieldType instanceof GraphQLEnumType) {
-              completedFields.push({ path, value: fieldValue, serialize: fieldType.serialize ?? identity });
+              completedFields.push({ path, value: fieldValue, serialize: fieldType.serialize.bind(fieldType) ?? identity });
               continue;
             }
   
