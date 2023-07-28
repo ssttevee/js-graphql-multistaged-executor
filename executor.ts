@@ -26,6 +26,7 @@ import { addPath, Path, pathToArray } from "graphql/jsutils/Path";
 import { extractOperationAndFragments } from "./ast";
 import { FragmentDefinitionMap, selectionFields } from "./selection";
 import { resolveArguments } from "./arguments";
+import { getFieldDef } from "graphql/execution/execute";
 
 export type WrappedValue<T> = PromiseLike<T> & (
   T extends Array<infer E> ? Array<WrappedValue<E>> :
@@ -316,7 +317,7 @@ export function createExecuteFn<TDeferred>(
             const { fieldNode, fieldNodes, prevPath, parentType, sourceValue: originalSourceValue, deferral } = step1_resolve.shift()!;
             const fieldKey = fieldNodeKey(fieldNode);
             const path = addPath(prevPath, fieldKey, parentType.name);
-            const fieldDef = parentType.getFields()[fieldNode.name.value];
+            const fieldDef = getFieldDef(schema, parentType, fieldNode)!;
             const resolveField = fieldDef.resolve ?? args.fieldResolver ?? defaultFieldResolver;
 
             let sourceValue = await originalSourceValue;
