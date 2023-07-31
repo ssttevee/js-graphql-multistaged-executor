@@ -6,9 +6,9 @@ import {
   FieldNode,
   FragmentDefinitionNode,
   getNamedType,
+  GraphQLAbstractType,
   GraphQLEnumType,
   GraphQLError,
-  GraphQLFieldMap,
   GraphQLFieldResolver,
   GraphQLInterfaceType,
   GraphQLObjectType,
@@ -17,6 +17,7 @@ import {
   GraphQLScalarType,
   GraphQLSchema,
   GraphQLUnionType,
+  isAbstractType,
   isListType,
   isNonNullType,
   OperationDefinitionNode,
@@ -41,6 +42,12 @@ export interface ExpandedChild {
   setData: (data: any) => void;
 }
 
+export interface ExpandedAbstractType {
+  concreteType: GraphQLObjectType;
+  sourceValue: unknown;
+  setDeferred: (v: any) => void;
+}
+
 export interface ExecutorBackend<TDeferred> {
   unwrapResolvedValue: (value: WrappedValue<any>) => unknown;
   isWrappedValue: (value: unknown) => value is WrappedValue<any>;
@@ -57,6 +64,7 @@ export interface ExecutorBackend<TDeferred> {
     fieldNodes: readonly FieldNode[],
     setDeferred: (data: TDeferred) => void,
   ): Array<ExpandedChild>;
+  expandAbstractType?: (schema: GraphQLSchema, path: Path, abstractValue: TDeferred, abstractType: GraphQLAbstractType, setDeferred: (data: TDeferred) => void) => Array<ExpandedAbstractType>;
 }
 
 type SerializeFunction = (value: any) => unknown;
@@ -146,6 +154,7 @@ interface BaseFieldContext {
 interface FieldToResolve<TDeferred> extends BaseFieldContext {
   prevPath: Path | undefined;
   sourceValue: any;
+  overrideFieldResolver?: GraphQLFieldResolver<any, any>;
   deferral?: {
     set: (v: TDeferred) => void;
     path: Array<string | number>;
@@ -258,6 +267,8 @@ function arrayNewElems<T>(prev: T[], next: T[]): T[] {
 
 const nextStage = Symbol();
 
+const resolveAbstractTypename = (source: any) => source.__typename;
+
 export function createExecuteFn<TDeferred>(
   backend: ExecutorBackend<TDeferred>,
 ): <T = any>(args: ExecutionArgs) => Promise<ExecutionResult<T>> {
@@ -314,11 +325,11 @@ export function createExecuteFn<TDeferred>(
       while (step1_resolve.length || step2_discriminate.length || step3_validate.length || step4_restage.length || step5_revalidate.length) {
         while (step1_resolve.length || step2_discriminate.length || step3_validate.length) {
           while (step1_resolve.length) {
-            const { fieldNode, fieldNodes, prevPath, parentType, sourceValue: originalSourceValue, deferral } = step1_resolve.shift()!;
+            const { fieldNode, fieldNodes, prevPath, parentType, sourceValue: originalSourceValue, deferral, overrideFieldResolver } = step1_resolve.shift()!;
             const fieldKey = fieldNodeKey(fieldNode);
             const path = addPath(prevPath, fieldKey, parentType.name);
             const fieldDef = getFieldDef(schema, parentType, fieldNode)!;
-            const resolveField = fieldDef.resolve ?? args.fieldResolver ?? defaultFieldResolver;
+            const resolveField = overrideFieldResolver ?? fieldDef.resolve ?? args.fieldResolver ?? defaultFieldResolver;
 
             let sourceValue = await originalSourceValue;
             if (backend.isDeferredValue(sourceValue)) {
@@ -404,12 +415,8 @@ export function createExecuteFn<TDeferred>(
               deferredPath = [index];
             }
 
-            const concreteType = getNamedType(fieldType);
-            if (concreteType instanceof GraphQLUnionType || concreteType instanceof GraphQLInterfaceType) {
-              throw new Error("union and interface types are not supported yet");
-            }
-
-            if (concreteType instanceof GraphQLEnumType || concreteType instanceof GraphQLScalarType) {
+            const namedFieldType = getNamedType(fieldType);
+            if (namedFieldType instanceof GraphQLEnumType || namedFieldType instanceof GraphQLScalarType) {
               // console.log('step2_discriminate: send to step5_revalidate', pathToArray(path), deferredPath);
               step5_revalidate.push({
                 fieldType,
@@ -422,32 +429,67 @@ export function createExecuteFn<TDeferred>(
               continue;
             }
 
-            const childFieldNodes = selectionFields(
-              ctx.schema,
-              ctx.fragments,
-              fieldNode.selectionSet?.selections ?? [],
-              concreteType,
-            );
+            const concreteTypes: Array<{
+              concreteType: GraphQLObjectType;
+              selectedFieldNodes: FieldNode[];
+              setDeferredChild: (v: TDeferred) => void;
+              deferredValue: TDeferred;
+            }> = [];
+            if (isAbstractType(namedFieldType)) {
+              if (!backend.expandAbstractType) {
+                throw new Error("eager determination of union and interface types are not supported yet");
+              }
+
+              concreteTypes.push(
+                ...backend
+                  .expandAbstractType(schema, path, fieldValue, namedFieldType, setDeferredChild)
+                  .map(({ concreteType, sourceValue, setDeferred }) => ({
+                    concreteType,
+                    selectedFieldNodes: selectionFields(
+                      ctx.schema,
+                      ctx.fragments,
+                      fieldNode.selectionSet?.selections ?? [],
+                      concreteType,
+                    ),
+                    deferredValue: sourceValue as TDeferred,
+                    setDeferredChild: setDeferred,
+                  })),
+              )
+            } else {
+              concreteTypes.push({
+                concreteType: namedFieldType,
+                selectedFieldNodes: selectionFields(
+                  ctx.schema,
+                  ctx.fragments,
+                  fieldNode.selectionSet?.selections ?? [],
+                  namedFieldType,
+                ),
+                deferredValue: fieldValue,
+                setDeferredChild,
+              });
+            }
+
 
             // console.log('step2_discriminate: send to step1_resolve', pathToArray(path), deferredPath);
             step1_resolve.push(
-              ...backend.expandChildren(
+              ...concreteTypes.flatMap(({ concreteType, selectedFieldNodes, setDeferredChild, deferredValue }) => backend.expandChildren(
                 path,
                 fieldType,
-                fieldValue,
-                childFieldNodes,
+                deferredValue,
+                selectedFieldNodes,
                 setDeferredChild,
               ).map((child) => ({
                 fieldNode: child.fieldNode,
-                fieldNodes: childFieldNodes,
+                fieldNodes: selectedFieldNodes,
                 prevPath: child.path,
                 parentType: concreteType,
                 sourceValue: child.sourceValue,
+                overrideFieldResolver: child.fieldNode.name.value === '__typename' && concreteType !== namedFieldType ? resolveAbstractTypename : undefined,
                 deferral: {
                   set: child.setData,
                   path: deferredPath.concat(arrayNewElems(pathToArray(path), pathToArray(child.path))),
                 },
-              }))
+              })))
             );
           }
 

@@ -1,6 +1,8 @@
-import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig } from "faunadb";
+import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, IsNull } from "faunadb";
 import {
   FieldNode,
+  GraphQLInterfaceType,
+  GraphQLObjectType,
   GraphQLOutputType,
   isListType,
   isNonNullType,
@@ -8,11 +10,12 @@ import {
 import { addPath, Path, pathToArray } from "graphql/jsutils/Path";
 
 import type { ExecutorBackend, WrappedValue } from "../executor";
+import { findImplementors } from "../utils";
 
 function isExpr(e: any) {
   return e && (
-      e instanceof Expr ||
-      Object.prototype.hasOwnProperty.call(e, '_isFaunaExpr')
+    e instanceof Expr ||
+    Object.prototype.hasOwnProperty.call(e, '_isFaunaExpr')
   )
 }
 
@@ -24,15 +27,15 @@ async function unwrapResolvedValue(expr: any) {
   expr = (expr as any)?.[wrapped] ? (expr as any)[original] : expr;
 
   if (isExpr(expr)) {
-      expr.raw = await unwrapResolvedValue(expr.raw);
+    expr.raw = await unwrapResolvedValue(expr.raw);
   } else if (Array.isArray(expr)) {
-      for (let [i, result] of (await Promise.all(expr.map(unwrapResolvedValue))).entries()) {
-          expr[i] = result;
-      };
+    for (let [i, result] of (await Promise.all(expr.map(unwrapResolvedValue))).entries()) {
+      expr[i] = result;
+    };
   } else if (expr instanceof Object) {
-      for (let [k, v] of (await Promise.all(Object.entries(expr).map(async ([k, v]) => [k, await unwrapResolvedValue(v)])))) {
-          expr[k] = v;
-      }
+    for (let [k, v] of (await Promise.all(Object.entries(expr).map(async ([k, v]) => [k, await unwrapResolvedValue(v)])))) {
+      expr[k] = v;
+    }
   }
 
   return expr;
@@ -157,6 +160,51 @@ export default function createExecutorBackend(
           },
         };
       });
+    },
+    expandAbstractType: (schema, path, deferredValue, abstractType, setDeferred) => {
+      let concreteTypes: readonly GraphQLObjectType[];
+      if (abstractType instanceof GraphQLInterfaceType) {
+        concreteTypes = findImplementors(schema, abstractType);
+      } else {
+        concreteTypes = abstractType.getTypes();
+      }
+
+      const varName = pathToArray(path).join("_");
+      const varNameType = varName + ":typename";
+
+      const branches: Record<string, Expr> = {};
+      const getDeferred = () => {
+        let expr: any = null;
+        for (let [k, v] of Object.entries(branches)) {
+          expr = If(
+            Equals(Var(varNameType), k),
+            v,
+            expr,
+          );
+        }
+
+        return Let(
+          {
+            [varName]: deferredValue,
+          },
+          Let(
+            {
+              [varNameType]: Select("__typename", Var(varName), null)
+            },
+            expr,
+          ),
+        );
+      };
+
+      const sourceValue = Var(varName);
+      return concreteTypes.map((concreteType) => ({
+        concreteType,
+        sourceValue,
+        setDeferred: (expr) => {
+          branches[concreteType.name] = expr;
+          setDeferred(getDeferred());
+        },
+      }));
     },
   };
 }
