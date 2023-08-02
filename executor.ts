@@ -151,10 +151,15 @@ interface BaseFieldContext {
   parentType: GraphQLObjectType;
 }
 
+interface ShouldExcludeResultPredicate {
+  (deferredPath: Array<string | number>, deferredValue: any): boolean;
+}
+
 interface FieldToResolve<TDeferred> extends BaseFieldContext {
   prevPath: Path | undefined;
   sourceValue: any;
   overrideFieldResolver?: GraphQLFieldResolver<any, any>;
+  shouldExcludeResult?: ShouldExcludeResultPredicate;
   deferral?: {
     set: (v: TDeferred) => void;
     path: Array<string | number>;
@@ -176,12 +181,14 @@ interface FieldToValidate extends BaseFieldContext {
 interface FieldToRestage extends BaseFieldContext {
   prevPath: Path | undefined;
   deferredPath: Array<string | number>;
+  shouldExcludeResult?: ShouldExcludeResultPredicate;
 }
 
 interface FieldToRevalidate extends BaseFieldContext {
   fieldType: GraphQLOutputType;
   fieldPath: Path;
   deferredPath: Array<string | number>;
+  shouldExcludeResult?: ShouldExcludeResultPredicate;
 }
 
 function selectFromObject(obj: any, path: Array<string | number>): any {
@@ -325,7 +332,7 @@ export function createExecuteFn<TDeferred>(
       while (step1_resolve.length || step2_discriminate.length || step3_validate.length || step4_restage.length || step5_revalidate.length) {
         while (step1_resolve.length || step2_discriminate.length || step3_validate.length) {
           while (step1_resolve.length) {
-            const { fieldNode, fieldNodes, prevPath, parentType, sourceValue: originalSourceValue, deferral, overrideFieldResolver } = step1_resolve.shift()!;
+            const { fieldNode, fieldNodes, prevPath, parentType, sourceValue: originalSourceValue, deferral, overrideFieldResolver, shouldExcludeResult } = step1_resolve.shift()!;
             const fieldKey = fieldNodeKey(fieldNode);
             const path = addPath(prevPath, fieldKey, parentType.name);
             const fieldDef = getFieldDef(schema, parentType, fieldNode)!;
@@ -368,7 +375,7 @@ export function createExecuteFn<TDeferred>(
               fieldValue = await fieldValue;
 
               // console.log('step1_resolve: send to step2_discriminate', pathToArray(path), fieldValue);
-              step2_discriminate.push({ fieldNode, fieldNodes, fieldValue, fieldType: fieldDef.type, parentType, path, deferral });
+              step2_discriminate.push({ fieldNode, fieldNodes, fieldValue, fieldType: fieldDef.type, parentType, path, deferral, shouldExcludeResult });
               continue;
             } catch (e) {
               if (e !== nextStage) {
@@ -389,11 +396,12 @@ export function createExecuteFn<TDeferred>(
               parentType,
               prevPath,
               deferredPath: [...deferral.path, fieldKey],
+              shouldExcludeResult,
             });
           }
 
           while (step2_discriminate.length) {
-            const { fieldNode, fieldNodes, fieldValue, fieldType, parentType, path, deferral } = step2_discriminate.shift()!;
+            const { fieldNode, fieldNodes, fieldValue, fieldType, parentType, path, deferral, shouldExcludeResult } = step2_discriminate.shift()!;
 
             if (!backend.isDeferredValue(fieldValue)) {
               // console.log('step2_discriminate: send to step3_validate', pathToArray(path), fieldValue);
@@ -425,6 +433,7 @@ export function createExecuteFn<TDeferred>(
                 fieldPath: path,
                 parentType,
                 deferredPath: deferredPath,
+                shouldExcludeResult,
               });
               continue;
             }
@@ -434,26 +443,56 @@ export function createExecuteFn<TDeferred>(
               selectedFieldNodes: FieldNode[];
               setDeferredChild: (v: TDeferred) => void;
               deferredValue: TDeferred;
+              shouldExcludeResult?: ShouldExcludeResultPredicate;
             }> = [];
             if (isAbstractType(namedFieldType)) {
               if (!backend.expandAbstractType) {
                 throw new Error("eager determination of union and interface types are not supported yet");
               }
 
+              const expanded = backend
+                .expandAbstractType(schema, path, fieldValue, namedFieldType, setDeferredChild)
+                .map(({ concreteType, ...rest }) => ({
+                  ...rest,
+                  concreteType,
+                  selectedFieldNodes: selectionFields(ctx.schema, ctx.fragments, fieldNode.selectionSet?.selections ?? [], concreteType),
+              }));
+
+              const typeFieldsMap = Object.fromEntries(
+                expanded.map(
+                  ({ concreteType, selectedFieldNodes }) => [
+                    concreteType.name,
+                    new Set(selectedFieldNodes.map((node) => fieldNodeKey(node))),
+                  ],
+                ),
+              );
+
+              const thisDeferredPath = deferredPath;
+              const shouldExcludeResultNext = (deferredPath: Array<string | number>, deferredValue: any) => {
+                  if (shouldExcludeResult?.(deferredPath, deferredValue)) {
+                      return true;
+                  }
+
+                  if (thisDeferredPath.length > deferredPath.length || !thisDeferredPath.every((v, i) => v === deferredPath[i])) {
+                      return false;
+                  }
+
+                  const value = selectFromObject(deferredValue, thisDeferredPath)?.__typename;
+                  const key = deferredPath[thisDeferredPath.length] as string;
+
+                  // console.log();
+                  return !typeFieldsMap[value]?.has(key);
+              }
+
+
               concreteTypes.push(
-                ...backend
-                  .expandAbstractType(schema, path, fieldValue, namedFieldType, setDeferredChild)
-                  .map(({ concreteType, sourceValue, setDeferred }) => ({
-                    concreteType,
-                    selectedFieldNodes: selectionFields(
-                      ctx.schema,
-                      ctx.fragments,
-                      fieldNode.selectionSet?.selections ?? [],
-                      concreteType,
-                    ),
-                    deferredValue: sourceValue as TDeferred,
-                    setDeferredChild: setDeferred,
-                  })),
+                ...expanded.map(({ concreteType, sourceValue, setDeferred, selectedFieldNodes }) => ({
+                  concreteType,
+                  selectedFieldNodes,
+                  deferredValue: sourceValue as TDeferred,
+                  setDeferredChild: setDeferred,
+                  shouldExcludeResult: shouldExcludeResultNext,
+                })),
               )
             } else {
               concreteTypes.push({
@@ -472,7 +511,7 @@ export function createExecuteFn<TDeferred>(
 
             // console.log('step2_discriminate: send to step1_resolve', pathToArray(path), deferredPath);
             step1_resolve.push(
-              ...concreteTypes.flatMap(({ concreteType, selectedFieldNodes, setDeferredChild, deferredValue }) => backend.expandChildren(
+              ...concreteTypes.flatMap(({ concreteType, selectedFieldNodes, setDeferredChild, deferredValue, shouldExcludeResult }) => backend.expandChildren(
                 path,
                 fieldType,
                 deferredValue,
@@ -485,6 +524,7 @@ export function createExecuteFn<TDeferred>(
                 parentType: concreteType,
                 sourceValue: child.sourceValue,
                 overrideFieldResolver: child.fieldNode.name.value === '__typename' && concreteType !== namedFieldType ? resolveAbstractTypename : undefined,
+                shouldExcludeResult,
                 deferral: {
                   set: child.setData,
                   path: deferredPath.concat(arrayNewElems(pathToArray(path), pathToArray(child.path))),
@@ -632,25 +672,33 @@ export function createExecuteFn<TDeferred>(
           // console.log(`resolved ${deferredExprs.length} deferred values`, deferredValues);
 
           while (step4_restage.length) {
-            const { fieldNode, fieldNodes, parentType, prevPath, deferredPath } = step4_restage.shift()!;
+            const { fieldNode, fieldNodes, parentType, prevPath, deferredPath, shouldExcludeResult } = step4_restage.shift()!;
+            if (shouldExcludeResult?.(deferredPath, deferredValues)) {
+              continue;
+            }
+
             // console.log('step4_restage', pathToArray(prevPath), deferredPath, expandFromObject(deferredValues, deferredPath, prevPath));
 
             step1_resolve.push(
-              ...expandFromObject(deferredValues, deferredPath, prevPath).map(({ path, value }) => {
+              ...expandFromObject(deferredValues, deferredPath, prevPath).flatMap(({ path, value }) => {
                 // console.log('step4_restage: send to step1_resolve', pathToArray(path), value);
-                return {
+                return [{
                   fieldNode,
                   fieldNodes,
                   parentType,
                   prevPath: path,
                   sourceValue: value,
-                };
+                }];
               }),
             );
           }
 
           while (step5_revalidate.length) {
-            const { fieldNode, fieldNodes, fieldType, fieldPath, deferredPath, parentType } = step5_revalidate.shift()!;
+            const { fieldNode, fieldNodes, fieldType, fieldPath, deferredPath, parentType, shouldExcludeResult } = step5_revalidate.shift()!;
+            if (shouldExcludeResult?.(deferredPath, deferredValues)) {
+              continue;
+            }
+
             // console.log('step5_revalidate:', pathToArray(fieldPath), deferredPath, deferredValues)
 
             step3_validate.push(

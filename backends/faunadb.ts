@@ -1,4 +1,4 @@
-import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, IsNull } from "faunadb";
+import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, Merge } from "faunadb";
 import {
   FieldNode,
   GraphQLInterfaceType,
@@ -191,7 +191,12 @@ export default function createExecutorBackend(
             {
               [varNameType]: Select("__typename", Var(varName), null)
             },
-            expr,
+            Merge(
+              expr,
+              {
+                __typename: Var(varNameType),
+              }
+            ),
           ),
         );
       };
