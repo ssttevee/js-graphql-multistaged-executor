@@ -23,6 +23,7 @@ export default [
       "faunadb",
       "graphql",
       "graphql/jsutils/Path",
+      "graphql/execution/execute",
     ],
     plugins: [
       typescript({
