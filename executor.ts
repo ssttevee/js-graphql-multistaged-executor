@@ -56,7 +56,7 @@ export interface ExecutorBackend<TDeferred> {
     getValue: () => Promise<unknown>,
   ): WrappedValue<any>;
   isDeferredValue(value: unknown): value is TDeferred;
-  resolveDeferredValues(values: TDeferred[]): Promise<unknown[]>;
+  resolveDeferredValues(values: Array<[TDeferred, Path]>): Promise<unknown[]>;
   expandChildren(
     path: Path,
     returnType: GraphQLOutputType,
@@ -327,7 +327,7 @@ export function createExecuteFn<TDeferred>(
       let step4_restage: Array<FieldToRestage> = [];
       let step5_revalidate: Array<FieldToRevalidate> = [];
 
-      let deferredExprs: TDeferred[] = [];
+      let deferredExprs: Array<[TDeferred, Path]> = [];
 
       while (step1_resolve.length || step2_discriminate.length || step3_validate.length || step4_restage.length || step5_revalidate.length) {
         while (step1_resolve.length || step2_discriminate.length || step3_validate.length) {
@@ -416,9 +416,9 @@ export function createExecuteFn<TDeferred>(
               deferredPath = (deferral?.path ?? []).concat(fieldNodeKey(fieldNode));
             } else {
               const index = deferredExprs.length;
-              deferredExprs.push(fieldValue);
+              deferredExprs.push([fieldValue, path]);
               setDeferredChild = (expr) => {
-                deferredExprs[index] = expr;
+                deferredExprs[index] = [expr, path];
               };
               deferredPath = [index];
             }
@@ -774,11 +774,10 @@ export function createExecuteFn<TDeferred>(
       return result;
     } catch (err) {
       return {
-        errors: [
-          new GraphQLError((err as any).message, {
-            originalError: (err as any).originalError ?? err,
-          }),
-        ],
+        errors: Array.from(
+          Array.isArray(err) ? err : [err],
+          (err) => err instanceof GraphQLError ? err : new GraphQLError(err.message, { originalError: err }),
+        ),
       };
     }
   };

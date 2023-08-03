@@ -1,6 +1,7 @@
-import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, Merge } from "faunadb";
+import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, Merge, errors } from "faunadb";
 import {
   FieldNode,
+  GraphQLError,
   GraphQLInterfaceType,
   GraphQLObjectType,
   GraphQLOutputType,
@@ -90,8 +91,36 @@ export default function createExecutorBackend(
   };
 
   return {
-    resolveDeferredValues: (query: Expr[]) => {
-      return client.query(query);
+    resolveDeferredValues: async (input) => {
+      const query = Array.from(input, ([expr]) => expr);
+      const paths = Array.from(input, ([, path]) => path);
+      try {
+        return await client.query(query);
+      } catch (e) {
+        if (!(e instanceof errors.FaunaHTTPError)) {
+          throw e;
+        }
+
+        throw Array.from(e.requestResult.responseContent.errors, (responseErr) => {
+          const objectPath: Array<string | number> = [];
+
+          let faunapath = responseErr.position.slice(1);
+          let objectpos;
+          while ((objectpos = faunapath.indexOf("object")) !== -1) {
+            faunapath = faunapath.slice(objectpos + 1);
+            if (faunapath.length > 0) {
+              objectPath.push(faunapath[0]);
+            }
+          }
+
+          return new GraphQLError(responseErr.description + ': ' + JSON.stringify(responseErr), {
+            path: [
+              ...pathToArray(paths[responseErr.position[0] as number]),
+              ...objectPath,
+            ],
+          });
+        });
+      }
     },
     isDeferredValue: (value: unknown): value is Expr => {
       return value instanceof Expr;
