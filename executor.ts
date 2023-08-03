@@ -732,7 +732,8 @@ export function createExecuteFn<TDeferred>(
       for (const { path, value, serialize } of completedFields) {
         let parent: [any, string | number] | null = null;
         let container: Record<string, any> | Array<any> = resultData;
-        for (const key of pathToArray(path)) {
+        const pathArray = pathToArray(path);
+        for (const key of pathArray) {
           if (typeof key === 'number') {
             if (!container) {
               if (!parent) {
@@ -763,7 +764,21 @@ export function createExecuteFn<TDeferred>(
           throw new Error('Expected parent');
         }
 
-        parent[0][parent[1]] = await serialize(await value);
+        try {
+          parent[0][parent[1]] = await serialize(await value);
+        } catch (err) {
+          resultErrors.push(
+            err instanceof GraphQLError
+              ? err
+              : new GraphQLError(
+                  (err as any).message,
+                  {
+                    originalError: err as any,
+                    path: pathArray,
+                  },
+                ),
+          );
+        }
       }
 
       const result: ExecutionResult<T> = { data: resultData as T };
