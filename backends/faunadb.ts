@@ -93,7 +93,7 @@ export default function createExecutorBackend(
   return {
     resolveDeferredValues: async (input) => {
       const query = Array.from(input, ([expr]) => expr);
-      const paths = Array.from(input, ([, path]) => path);
+      const paths = Array.from(input, ([, path]) => pathToArray(path));
       try {
         return await client.query(query);
       } catch (e) {
@@ -101,7 +101,10 @@ export default function createExecutorBackend(
           throw e;
         }
 
+        const rawQuery = JSON.parse(JSON.stringify(query));
         throw Array.from(e.requestResult.responseContent.errors, (responseErr) => {
+          const pathPrefix = paths[responseErr.position[0] as number];
+
           const objectPath: Array<string | number> = [];
 
           let faunapath = responseErr.position.slice(1);
@@ -113,9 +116,20 @@ export default function createExecutorBackend(
             }
           }
 
-          return new GraphQLError(responseErr.description + ': ' + JSON.stringify(responseErr), {
+          let errQuery = rawQuery;
+          let cause: any = responseErr;
+          if (responseErr.code === 'call error') {
+              for (const pos of responseErr.position) {
+                  errQuery = errQuery[pos];
+              }
+
+              responseErr.description = responseErr.description.replace('the function', JSON.stringify(errQuery.call))
+              cause = responseErr.cause;
+          }
+
+          return new GraphQLError(responseErr.description + ': ' + JSON.stringify(cause), {
             path: [
-              ...pathToArray(paths[responseErr.position[0] as number]),
+              ...pathPrefix,
               ...objectPath,
             ],
           });
