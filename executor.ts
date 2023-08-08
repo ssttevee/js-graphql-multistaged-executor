@@ -334,349 +334,378 @@ export function createExecuteFn<TDeferred>(
 
       const completedFields: Array<{ path: Path; value: any; serialize: SerializeFunction }> = [];
 
-      let step1_resolve: Array<FieldToResolve<TDeferred>> = buildUnresolvedFields(schema, ctx.fragments, undefined, rootType, rootValue, operation.selectionSet.selections);
-      let step2_discriminate: Array<FieldToDiscriminate<TDeferred>> = [];
-      let step3_validate: Array<FieldToValidate> = [];
-      let step4_restage: Array<FieldToRestage> = [];
-      let step5_revalidate: Array<FieldToRevalidate> = [];
+      const step1_resolve: Array<FieldToResolve<TDeferred>> = buildUnresolvedFields(schema, ctx.fragments, undefined, rootType, rootValue, operation.selectionSet.selections);
+      const step2_discriminate: Array<FieldToDiscriminate<TDeferred>> = [];
+      const step3_validate: Array<FieldToValidate> = [];
 
-      let deferredExprs: Array<[TDeferred, Path]> = [];
+      while (step1_resolve.length || step2_discriminate.length || step3_validate.length) {
+        const step4_restage: Array<FieldToRestage> = [];
+        const step5_revalidate: Array<FieldToRevalidate> = [];
 
-      while (step1_resolve.length || step2_discriminate.length || step3_validate.length || step4_restage.length || step5_revalidate.length) {
+        const deferredExprs: Array<[TDeferred, Path]> = [];
+
         while (step1_resolve.length || step2_discriminate.length || step3_validate.length) {
           while (step1_resolve.length) {
             const { fieldNode, fieldNodes, prevPath, parentType, sourceValue: originalSourceValue, deferral, overrideFieldResolver, shouldExcludeResult } = step1_resolve.shift()!;
             const fieldKey = fieldNodeKey(fieldNode);
             const path = addPath(prevPath, fieldKey, parentType.name);
-            const fieldDef = getFieldDef(schema, parentType, fieldNode)!;
-            const resolveField = overrideFieldResolver ?? fieldDef.resolve ?? args.fieldResolver ?? defaultFieldResolver;
-
-            let sourceValue = await originalSourceValue;
-            if (backend.isDeferredValue(sourceValue)) {
-              sourceValue = backend.wrapSourceValue(
-                sourceValue,
-                // () => new Promise<unknown>((r) => pause(r)),
-                () => Promise.reject(nextStage),
-              );
-            }
-
             try {
-              let fieldValue = resolveField(
-                sourceValue,
-                resolveArguments(
-                  ctx.variableValues,
-                  fieldNode.arguments,
-                  fieldDef.args,
-                ),
-                contextValue,
-                buildResolveInfo(
-                  ctx,
-                  {
-                    fieldNode,
-                    fieldNodes,
-                    path,
-                    parentType,
-                  },
-                  fieldDef.type,
-                ),
-              );
+              const fieldDef = getFieldDef(schema, parentType, fieldNode)!;
+              const resolveField = overrideFieldResolver ?? fieldDef.resolve ?? args.fieldResolver ?? defaultFieldResolver;
 
-              if (backend.isWrappedValue(fieldValue)) {
-                fieldValue = backend.unwrapResolvedValue(fieldValue);
+              let sourceValue = await originalSourceValue;
+              if (backend.isDeferredValue(sourceValue)) {
+                sourceValue = backend.wrapSourceValue(
+                  sourceValue,
+                  // () => new Promise<unknown>((r) => pause(r)),
+                  () => Promise.reject(nextStage),
+                );
               }
 
-              fieldValue = await fieldValue;
+              try {
+                let fieldValue = resolveField(
+                  sourceValue,
+                  resolveArguments(
+                    ctx.variableValues,
+                    fieldNode.arguments,
+                    fieldDef.args,
+                  ),
+                  contextValue,
+                  buildResolveInfo(
+                    ctx,
+                    {
+                      fieldNode,
+                      fieldNodes,
+                      path,
+                      parentType,
+                    },
+                    fieldDef.type,
+                  ),
+                );
 
-              // console.log('step1_resolve: send to step2_discriminate', pathToArray(path), fieldValue);
-              step2_discriminate.push({ fieldNode, fieldNodes, fieldValue, fieldType: fieldDef.type, parentType, path, deferral, shouldExcludeResult });
-              continue;
+                if (backend.isWrappedValue(fieldValue)) {
+                  fieldValue = backend.unwrapResolvedValue(fieldValue);
+                }
+
+                fieldValue = await fieldValue;
+
+                // console.log('step1_resolve: send to step2_discriminate', pathToArray(path), fieldValue);
+                step2_discriminate.push({ fieldNode, fieldNodes, fieldValue, fieldType: fieldDef.type, parentType, path, deferral, shouldExcludeResult });
+                continue;
+              } catch (e) {
+                if (e !== nextStage) {
+                  throw e;
+                }
+              }
+
+              // the field resolver awaited a deferred value, so we need to wait for it to resolve
+              if (!deferral) {
+                throw new Error('expected deferral value');
+              }
+
+              // console.log('step1_resolve: send to step4_restage', pathToArray(prevPath), fieldValue);
+              deferral.set(sourceValue);
+              step4_restage.push({
+                fieldNode,
+                fieldNodes,
+                parentType,
+                prevPath,
+                deferredPath: [...deferral.path, fieldKey],
+                shouldExcludeResult,
+              });
             } catch (e) {
-              if (e !== nextStage) {
-                throw e;
-              }
+              resultErrors.push(new GraphQLError((e as any)?.message ?? String(e), {
+                nodes: (e as any).nodes ?? [fieldNode],
+                source: (e as any).source ?? fieldNode.loc?.source,
+                positions: (e as any).positions ?? (fieldNode.loc?.source && [fieldNode.loc.start]),
+                path: (e as any).path ?? pathToArray(path),
+                originalError: e as any,
+              }));
             }
-
-            // the field resolver awaited a deferred value, so we need to wait for it to resolve
-            if (!deferral) {
-              throw new Error('expected deferral value');
-            }
-
-            // console.log('step1_resolve: send to step4_restage', pathToArray(prevPath), fieldValue);
-            deferral.set(sourceValue);
-            step4_restage.push({
-              fieldNode,
-              fieldNodes,
-              parentType,
-              prevPath,
-              deferredPath: [...deferral.path, fieldKey],
-              shouldExcludeResult,
-            });
           }
 
           while (step2_discriminate.length) {
             const { fieldNode, fieldNodes, fieldValue, fieldType, parentType, path, deferral, shouldExcludeResult } = step2_discriminate.shift()!;
-
-            if (!backend.isDeferredValue(fieldValue)) {
-              // console.log('step2_discriminate: send to step3_validate', pathToArray(path), fieldValue);
-              step3_validate.push({ fieldType, fieldValue, parentType, fieldNode, fieldNodes, path });
-              continue;
-            }
-
-            let setDeferredChild: (v: TDeferred) => void;
-            let deferredPath: Array<string | number>;
-            if (deferral) {
-              (setDeferredChild = deferral.set)(fieldValue);
-              deferredPath = (deferral?.path ?? []).concat(fieldNodeKey(fieldNode));
-            } else {
-              const index = deferredExprs.length;
-              deferredExprs.push([fieldValue, path]);
-              setDeferredChild = (expr) => {
-                deferredExprs[index] = [expr, path];
-              };
-              deferredPath = [index];
-            }
-
-            const namedFieldType = getNamedType(fieldType);
-            if (namedFieldType instanceof GraphQLEnumType || namedFieldType instanceof GraphQLScalarType) {
-              // console.log('step2_discriminate: send to step5_revalidate', pathToArray(path), deferredPath);
-              step5_revalidate.push({
-                fieldType,
-                fieldNode,
-                fieldNodes,
-                fieldPath: path,
-                parentType,
-                deferredPath: deferredPath,
-                shouldExcludeResult,
-              });
-              continue;
-            }
-
-            const concreteTypes: Array<{
-              concreteType: GraphQLObjectType;
-              selectedFieldNodes: FieldNode[];
-              setDeferredChild: (v: TDeferred) => void;
-              deferredValue: TDeferred;
-              shouldExcludeResult?: ShouldExcludeResultPredicate;
-            }> = [];
-            if (isAbstractType(namedFieldType)) {
-              if (!backend.expandAbstractType) {
-                throw new Error("eager determination of union and interface types are not supported yet");
+            try {
+              if (!backend.isDeferredValue(fieldValue)) {
+                // console.log('step2_discriminate: send to step3_validate', pathToArray(path), fieldValue);
+                step3_validate.push({ fieldType, fieldValue, parentType, fieldNode, fieldNodes, path });
+                continue;
               }
 
-              const expanded = backend
-                .expandAbstractType(schema, path, fieldValue, namedFieldType, setDeferredChild)
-                .map(({ concreteType, ...rest }) => ({
-                  ...rest,
-                  concreteType,
-                  selectedFieldNodes: selectionFields(ctx.schema, ctx.fragments, fieldNode.selectionSet?.selections ?? [], concreteType),
-              }));
+              let setDeferredChild: (v: TDeferred) => void;
+              let deferredPath: Array<string | number>;
+              if (deferral) {
+                (setDeferredChild = deferral.set)(fieldValue);
+                deferredPath = (deferral?.path ?? []).concat(fieldNodeKey(fieldNode));
+              } else {
+                const index = deferredExprs.length;
+                deferredExprs.push([fieldValue, path]);
+                setDeferredChild = (expr) => {
+                  deferredExprs[index] = [expr, path];
+                };
+                deferredPath = [index];
+              }
 
-              const typeFieldsMap = Object.fromEntries(
-                expanded.map(
-                  ({ concreteType, selectedFieldNodes }) => [
-                    concreteType.name,
-                    new Set(selectedFieldNodes.map((node) => fieldNodeKey(node))),
-                  ],
-                ),
-              );
+              const namedFieldType = getNamedType(fieldType);
+              if (namedFieldType instanceof GraphQLEnumType || namedFieldType instanceof GraphQLScalarType) {
+                // console.log('step2_discriminate: send to step5_revalidate', pathToArray(path), deferredPath);
+                step5_revalidate.push({
+                  fieldType,
+                  fieldNode,
+                  fieldNodes,
+                  fieldPath: path,
+                  parentType,
+                  deferredPath: deferredPath,
+                  shouldExcludeResult,
+                });
+                continue;
+              }
 
-              const thisDeferredPath = deferredPath;
-              const shouldExcludeResultNext = (deferredPath: Array<string | number>, deferredValue: any) => {
-                  if (shouldExcludeResult?.(deferredPath, deferredValue)) {
-                      return true;
-                  }
+              const concreteTypes: Array<{
+                concreteType: GraphQLObjectType;
+                selectedFieldNodes: FieldNode[];
+                setDeferredChild: (v: TDeferred) => void;
+                deferredValue: TDeferred;
+                shouldExcludeResult?: ShouldExcludeResultPredicate;
+              }> = [];
+              if (isAbstractType(namedFieldType)) {
+                if (!backend.expandAbstractType) {
+                  throw new Error("eager determination of union and interface types are not supported yet");
+                }
 
-                  if (thisDeferredPath.length > deferredPath.length || !thisDeferredPath.every((v, i) => v === deferredPath[i])) {
-                      return false;
-                  }
+                const expanded = backend
+                  .expandAbstractType(schema, path, fieldValue, namedFieldType, setDeferredChild)
+                  .map(({ concreteType, ...rest }) => ({
+                    ...rest,
+                    concreteType,
+                    selectedFieldNodes: selectionFields(ctx.schema, ctx.fragments, fieldNode.selectionSet?.selections ?? [], concreteType),
+                }));
 
-                  const value = selectFromObject(deferredValue, thisDeferredPath)?.__typename;
-                  const key = deferredPath[thisDeferredPath.length] as string;
+                const typeFieldsMap = Object.fromEntries(
+                  expanded.map(
+                    ({ concreteType, selectedFieldNodes }) => [
+                      concreteType.name,
+                      new Set(selectedFieldNodes.map((node) => fieldNodeKey(node))),
+                    ],
+                  ),
+                );
 
-                  // console.log();
-                  return !typeFieldsMap[value]?.has(key);
+                const thisDeferredPath = deferredPath;
+                const shouldExcludeResultNext = (deferredPath: Array<string | number>, deferredValue: any) => {
+                    if (shouldExcludeResult?.(deferredPath, deferredValue)) {
+                        return true;
+                    }
+
+                    if (thisDeferredPath.length > deferredPath.length || !thisDeferredPath.every((v, i) => v === deferredPath[i])) {
+                        return false;
+                    }
+
+                    const value = selectFromObject(deferredValue, thisDeferredPath)?.__typename;
+                    const key = deferredPath[thisDeferredPath.length] as string;
+
+                    // console.log();
+                    return !typeFieldsMap[value]?.has(key);
+                }
+
+
+                concreteTypes.push(
+                  ...expanded.map(({ concreteType, sourceValue, setDeferred, selectedFieldNodes }) => ({
+                    concreteType,
+                    selectedFieldNodes,
+                    deferredValue: sourceValue as TDeferred,
+                    setDeferredChild: setDeferred,
+                    shouldExcludeResult: shouldExcludeResultNext,
+                  })),
+                )
+              } else {
+                concreteTypes.push({
+                  concreteType: namedFieldType,
+                  selectedFieldNodes: selectionFields(
+                    ctx.schema,
+                    ctx.fragments,
+                    fieldNode.selectionSet?.selections ?? [],
+                    namedFieldType,
+                  ),
+                  deferredValue: fieldValue,
+                  setDeferredChild,
+                });
               }
 
 
-              concreteTypes.push(
-                ...expanded.map(({ concreteType, sourceValue, setDeferred, selectedFieldNodes }) => ({
-                  concreteType,
+              // console.log('step2_discriminate: send to step1_resolve', pathToArray(path), deferredPath);
+              step1_resolve.push(
+                ...concreteTypes.flatMap(({ concreteType, selectedFieldNodes, setDeferredChild, deferredValue, shouldExcludeResult }) => backend.expandChildren(
+                  path,
+                  fieldType,
+                  deferredValue,
                   selectedFieldNodes,
-                  deferredValue: sourceValue as TDeferred,
-                  setDeferredChild: setDeferred,
-                  shouldExcludeResult: shouldExcludeResultNext,
-                })),
-              )
-            } else {
-              concreteTypes.push({
-                concreteType: namedFieldType,
-                selectedFieldNodes: selectionFields(
-                  ctx.schema,
-                  ctx.fragments,
-                  fieldNode.selectionSet?.selections ?? [],
-                  namedFieldType,
-                ),
-                deferredValue: fieldValue,
-                setDeferredChild,
-              });
+                  setDeferredChild,
+                ).map((child) => ({
+                  fieldNode: child.fieldNode,
+                  fieldNodes: selectedFieldNodes,
+                  prevPath: child.path,
+                  parentType: concreteType,
+                  sourceValue: child.sourceValue,
+                  overrideFieldResolver: child.fieldNode.name.value === '__typename' && concreteType !== namedFieldType ? resolveAbstractTypename : undefined,
+                  shouldExcludeResult,
+                  deferral: {
+                    set: child.setData,
+                    path: deferredPath.concat(arrayNewElems(pathToArray(path), pathToArray(child.path))),
+                  },
+                })))
+              );
+            } catch (e) {
+              resultErrors.push(new GraphQLError((e as any)?.message ?? String(e), {
+                nodes: (e as any).nodes ?? [fieldNode],
+                source: (e as any).source ?? fieldNode.loc?.source,
+                positions: (e as any).positions ?? (fieldNode.loc?.source && [fieldNode.loc.start]),
+                path: (e as any).path ?? pathToArray(path),
+                originalError: e as any,
+              }));
             }
-
-
-            // console.log('step2_discriminate: send to step1_resolve', pathToArray(path), deferredPath);
-            step1_resolve.push(
-              ...concreteTypes.flatMap(({ concreteType, selectedFieldNodes, setDeferredChild, deferredValue, shouldExcludeResult }) => backend.expandChildren(
-                path,
-                fieldType,
-                deferredValue,
-                selectedFieldNodes,
-                setDeferredChild,
-              ).map((child) => ({
-                fieldNode: child.fieldNode,
-                fieldNodes: selectedFieldNodes,
-                prevPath: child.path,
-                parentType: concreteType,
-                sourceValue: child.sourceValue,
-                overrideFieldResolver: child.fieldNode.name.value === '__typename' && concreteType !== namedFieldType ? resolveAbstractTypename : undefined,
-                shouldExcludeResult,
-                deferral: {
-                  set: child.setData,
-                  path: deferredPath.concat(arrayNewElems(pathToArray(path), pathToArray(child.path))),
-                },
-              })))
-            );
           }
 
           while (step3_validate.length) {
             const { fieldType: originalFieldType, fieldNode, fieldNodes, fieldValue, parentType, path } = step3_validate.shift()!;
-  
+
             // console.log('step3_validate', pathToArray(path), fieldValue, fieldValue, parentType.toString(), originalFieldType.toString());
-  
-            let fieldType = originalFieldType;
-            if (isNonNullType(fieldType)) {
-              if (isNullValue(fieldValue)) {
-                resultErrors.push(new GraphQLError(
-                  `Cannot return null for non-nullable field`,
-                  {
-                    nodes: fieldNode,
-                    source: fieldNode.loc?.source,
-                    positions: null,
-                    path: pathToArray(path),
-                  }
-                ));
-                continue;
+            try {
+              let fieldType = originalFieldType;
+              if (isNonNullType(fieldType)) {
+                if (isNullValue(fieldValue)) {
+                  resultErrors.push(new GraphQLError(
+                    `Cannot return null for non-nullable field`,
+                    {
+                      nodes: fieldNode,
+                      source: fieldNode.loc?.source,
+                      positions: null,
+                      path: pathToArray(path),
+                    }
+                  ));
+                  continue;
+                }
+    
+                fieldType = fieldType.ofType;
               }
-  
-              fieldType = fieldType.ofType;
-            }
-  
-            if (isListType(fieldType)) {
-              if (!Array.isArray(fieldValue)) {
-                resultErrors.push(new GraphQLError(
-                  `Cannot return non-list value for list field`,
-                  {
-                    nodes: fieldNode,
-                    source: fieldNode.loc?.source,
-                    positions: null,
-                    path: pathToArray(path),
-                  }
-                ));
+    
+              if (isListType(fieldType)) {
+                if (!Array.isArray(fieldValue)) {
+                  resultErrors.push(new GraphQLError(
+                    `Cannot return non-list value for list field`,
+                    {
+                      nodes: fieldNode,
+                      source: fieldNode.loc?.source,
+                      positions: null,
+                      path: pathToArray(path),
+                    }
+                  ));
+                } else {
+                  const elementFieldType = fieldType.ofType;
+                  // console.log('step3_validate: send to step3_validate', pathToArray(path), fieldValue);
+                  step3_validate.push(...fieldValue.map((value, index) => ({
+                    fieldType: elementFieldType,
+                    fieldValue: value,
+                    parentType: parentType,
+                    fieldNode: fieldNode,
+                    fieldNodes: fieldNodes,
+                    path: addPath(path, index, undefined),
+                  })));
+                }
+    
+    
+                continue;
               } else {
-                const elementFieldType = fieldType.ofType;
-                // console.log('step3_validate: send to step3_validate', pathToArray(path), fieldValue);
-                step3_validate.push(...fieldValue.map((value, index) => ({
-                  fieldType: elementFieldType,
-                  fieldValue: value,
-                  parentType: parentType,
-                  fieldNode: fieldNode,
-                  fieldNodes: fieldNodes,
-                  path: addPath(path, index, undefined),
-                })));
+                if (Array.isArray(fieldValue) && !(fieldType instanceof GraphQLScalarType)) {
+                  resultErrors.push(new GraphQLError(
+                    `Cannot return list value for non-list field`,
+                    {
+                      nodes: fieldNode,
+                      source: fieldNode.loc?.source,
+                      positions: null,
+                      path: pathToArray(path),
+                    }
+                  ));
+                  continue;
+                }
               }
-  
-  
-              continue;
-            } else {
-              if (Array.isArray(fieldValue) && !(fieldType instanceof GraphQLScalarType)) {
-                resultErrors.push(new GraphQLError(
-                  `Cannot return list value for non-list field`,
-                  {
-                    nodes: fieldNode,
-                    source: fieldNode.loc?.source,
-                    positions: null,
-                    path: pathToArray(path),
-                  }
-                ));
+    
+              if (fieldType instanceof GraphQLScalarType || fieldType instanceof GraphQLEnumType) {
+                completedFields.push({ path, value: fieldValue, serialize: fieldType.serialize.bind(fieldType) ?? identity });
                 continue;
               }
-            }
-  
-            if (fieldType instanceof GraphQLScalarType || fieldType instanceof GraphQLEnumType) {
-              completedFields.push({ path, value: fieldValue, serialize: fieldType.serialize.bind(fieldType) ?? identity });
-              continue;
-            }
-  
-            let concreteType: GraphQLObjectType;
-            if (fieldType instanceof GraphQLInterfaceType || fieldType instanceof GraphQLUnionType) {
-              const resolveType = fieldType.resolveType ?? args.typeResolver ?? defaultTypeResolver;
-              const typeName = await resolveType(
-                fieldValue,
-                contextValue,
-                buildResolveInfo(
-                  ctx,
-                  {
-                    fieldNode,
-                    fieldNodes,
-                    path,
-                    parentType,
-                  },
+    
+              let concreteType: GraphQLObjectType;
+              if (fieldType instanceof GraphQLInterfaceType || fieldType instanceof GraphQLUnionType) {
+                const resolveType = fieldType.resolveType ?? args.typeResolver ?? defaultTypeResolver;
+                const typeName = await resolveType(
+                  fieldValue,
+                  contextValue,
+                  buildResolveInfo(
+                    ctx,
+                    {
+                      fieldNode,
+                      fieldNodes,
+                      path,
+                      parentType,
+                    },
+                    fieldType,
+                  ),
                   fieldType,
-                ),
-                fieldType,
-              );
-  
-              const resolvedType = typeName && schema.getType(typeName);
-              if (!resolvedType || !(resolvedType instanceof GraphQLObjectType)) {
+                );
+    
+                const resolvedType = typeName && schema.getType(typeName);
+                if (!resolvedType || !(resolvedType instanceof GraphQLObjectType)) {
+                  resultErrors.push(new GraphQLError(
+                    `Failed to resolve concrete type`,
+                    {
+                      nodes: fieldNode,
+                      source: fieldNode.loc?.source,
+                      positions: null,
+                      path: pathToArray(path),
+                    }
+                  ));
+                  continue;
+                }
+
+                concreteType = resolvedType;
+              } else {
+                concreteType = fieldType;
+              }
+
+              if (!fieldNode.selectionSet) {
                 resultErrors.push(new GraphQLError(
-                  `Failed to resolve concrete type`,
+                  `At least one selection must be provided for a composite type`,
                   {
                     nodes: fieldNode,
                     source: fieldNode.loc?.source,
                     positions: null,
                     path: pathToArray(path),
-                  }
+                  },
                 ));
                 continue;
               }
-
-              concreteType = resolvedType;
-            } else {
-              concreteType = fieldType;
+    
+              // console.log('step3_validate: send to step1_resolve', pathToArray(path), fieldValue);
+              step1_resolve.push(
+                ...buildUnresolvedFields(
+                  schema,
+                  ctx.fragments,
+                  path,
+                  concreteType,
+                  fieldValue,
+                  fieldNode.selectionSet.selections,
+                ),
+              );
+            } catch (e) {
+              resultErrors.push(new GraphQLError((e as any)?.message ?? String(e), {
+                nodes: (e as any).nodes ?? fieldNode,
+                source: (e as any).source ?? fieldNode.loc?.source,
+                positions: (e as any).positions ?? (fieldNode.loc?.source && [fieldNode.loc.start]),
+                path: (e as any).path ?? pathToArray(path),
+                originalError: e as any,
+              }));
             }
-
-            if (!fieldNode.selectionSet) {
-              resultErrors.push(new GraphQLError(
-                `At least one selection must be provided for a composite type`,
-                {
-                  nodes: fieldNode,
-                  source: fieldNode.loc?.source,
-                  positions: null,
-                  path: pathToArray(path),
-                },
-              ));
-              continue;
-            }
-  
-            // console.log('step3_validate: send to step1_resolve', pathToArray(path), fieldValue);
-            step1_resolve.push(
-              ...buildUnresolvedFields(
-                schema,
-                ctx.fragments,
-                path,
-                concreteType,
-                fieldValue,
-                fieldNode.selectionSet.selections,
-              ),
-            );
           }
         }
 
@@ -686,47 +715,67 @@ export function createExecuteFn<TDeferred>(
 
           while (step4_restage.length) {
             const { fieldNode, fieldNodes, parentType, prevPath, deferredPath, shouldExcludeResult } = step4_restage.shift()!;
-            if (shouldExcludeResult?.(deferredPath, deferredValues)) {
-              continue;
+            try {
+              if (shouldExcludeResult?.(deferredPath, deferredValues)) {
+                continue;
+              }
+
+              // console.log('step4_restage', pathToArray(prevPath), deferredPath, expandFromObject(deferredValues, deferredPath, prevPath));
+
+              step1_resolve.push(
+                ...expandFromObject(deferredValues, deferredPath, prevPath).flatMap(({ path, value }) => {
+                  // console.log('step4_restage: send to step1_resolve', pathToArray(path), value);
+                  return [{
+                    fieldNode,
+                    fieldNodes,
+                    parentType,
+                    prevPath: path,
+                    sourceValue: value,
+                  }];
+                }),
+              );
+            } catch (e) {
+              resultErrors.push(new GraphQLError((e as any)?.message ?? String(e), {
+                nodes: (e as any).nodes ?? [fieldNode],
+                source: (e as any).source ?? fieldNode.loc?.source,
+                positions: (e as any).positions ?? (fieldNode.loc?.source && [fieldNode.loc.start]),
+                path: (e as any).path ?? pathToArray(prevPath),
+                originalError: e as any,
+              }));
             }
-
-            // console.log('step4_restage', pathToArray(prevPath), deferredPath, expandFromObject(deferredValues, deferredPath, prevPath));
-
-            step1_resolve.push(
-              ...expandFromObject(deferredValues, deferredPath, prevPath).flatMap(({ path, value }) => {
-                // console.log('step4_restage: send to step1_resolve', pathToArray(path), value);
-                return [{
-                  fieldNode,
-                  fieldNodes,
-                  parentType,
-                  prevPath: path,
-                  sourceValue: value,
-                }];
-              }),
-            );
           }
 
           while (step5_revalidate.length) {
             const { fieldNode, fieldNodes, fieldType, fieldPath, deferredPath, parentType, shouldExcludeResult } = step5_revalidate.shift()!;
-            if (shouldExcludeResult?.(deferredPath, deferredValues)) {
-              continue;
+            try {
+              if (shouldExcludeResult?.(deferredPath, deferredValues)) {
+                continue;
+              }
+
+              // console.log('step5_revalidate:', pathToArray(fieldPath), deferredPath, deferredValues)
+
+              step3_validate.push(
+                ...expandFromObject(deferredValues, deferredPath, fieldPath).map(({ path, value }) => {
+                  // console.log('step5_revalidate: send to step3_validate', pathToArray(path), value);
+                  return ({
+                    fieldNode,
+                    fieldNodes,
+                    fieldType,
+                    fieldValue: value,
+                    parentType,
+                    path: path,
+                  });
+                }),
+              );
+            } catch (e) {
+              resultErrors.push(new GraphQLError((e as any)?.message ?? String(e), {
+                nodes: (e as any).nodes ?? [fieldNode],
+                source: (e as any).source ?? fieldNode.loc?.source,
+                positions: (e as any).positions ?? (fieldNode.loc?.source && [fieldNode.loc.start]),
+                path: (e as any).path ?? pathToArray(fieldPath),
+                originalError: e as any,
+              }));
             }
-
-            // console.log('step5_revalidate:', pathToArray(fieldPath), deferredPath, deferredValues)
-
-            step3_validate.push(
-              ...expandFromObject(deferredValues, deferredPath, fieldPath).map(({ path, value }) => {
-                // console.log('step5_revalidate: send to step3_validate', pathToArray(path), value);
-                return ({
-                  fieldNode,
-                  fieldNodes,
-                  fieldType,
-                  fieldValue: value,
-                  parentType,
-                  path: path,
-                });
-              }),
-            );
           }
         }
 
@@ -737,8 +786,6 @@ export function createExecuteFn<TDeferred>(
         if (step5_revalidate.length) {
           throw new Error('Expected no backfill');
         }
-
-        deferredExprs = [];
       }
 
       const resultData: Record<string, any> = {};
