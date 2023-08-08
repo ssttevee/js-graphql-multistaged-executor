@@ -22,9 +22,7 @@ function parseVariableValue(value: unknown, type: GraphQLInputType): unknown {
     }
 
     type = type.ofType;
-  }
-
-  if (isNullValue(value)) {
+  } else if (isNullValue(value)) {
     return null;
   }
 
@@ -57,42 +55,49 @@ function resolveArgument(
   type: GraphQLInputType,
   variables: Record<string, unknown> | undefined,
 ): unknown {
-  if (valueNode.kind === Kind.VARIABLE) {
-    const variableName = valueNode.name.value;
-    if (!variables || !(variableName in variables)) {
-      return new GraphQLError("found undefined variable: " + variableName);
+  try {
+    if (isNonNullType(type)) {
+      if (!valueNode || valueNode.kind === Kind.NULL) {
+        throw new GraphQLError("found null value for non-null input type");
+      }
+
+      type = type.ofType;
+    } else if (!valueNode || valueNode.kind === Kind.NULL) {
+      return null;
     }
 
-    return parseVariableValue(variables[variableName], type);
-  }
+    if (valueNode.kind === Kind.VARIABLE) {
+      const variableName = valueNode.name.value;
+      if (!variables || !(variableName in variables)) {
+        throw new GraphQLError("found undefined variable: " + variableName);
+      }
 
-  if (isNonNullType(type)) {
-    if (valueNode.kind === Kind.NULL) {
-      return new GraphQLError("found null value for non-null input type");
+      return parseVariableValue(variables[variableName], type);
     }
 
-    type = type.ofType;
-  }
+    if (isListType(type)) {
+      if (valueNode.kind !== Kind.LIST) {
+        throw new GraphQLError("found non-list value for list input type");
+      }
 
-  if (valueNode.kind === Kind.NULL) {
-    return null;
-  }
-
-  if (isListType(type)) {
-    if (valueNode.kind !== Kind.LIST) {
-      return new GraphQLError("found non-list value for list input type");
+      const itemType = type.ofType;
+      return valueNode.values.map((item) => resolveArgument(item, itemType, variables));
     }
 
-    const itemType = type.ofType;
-    return valueNode.values.map((item) => resolveArgument(item, itemType, variables));
-  }
+    if (isScalarType(type) || isEnumType(type)) {
+      return type.parseLiteral(valueNode, variables);
+    }
 
-  if (isScalarType(type) || isEnumType(type)) {
-    return type.parseLiteral(valueNode, variables);
-  }
-
-  if (valueNode.kind !== Kind.OBJECT) {
-    return new GraphQLError("found non-object value for object input type");
+    if (valueNode.kind !== Kind.OBJECT) {
+      throw new GraphQLError("found non-object value for object input type");
+    }
+  } catch (e) {
+    throw new GraphQLError((e as any)?.message ?? String(e), {
+      nodes: [valueNode],
+      positions: [valueNode.loc?.start ?? -1],
+      source: valueNode.loc?.source,
+      originalError: e as any,
+    });
   }
 
   const valueFieldNodes = Object.fromEntries(
