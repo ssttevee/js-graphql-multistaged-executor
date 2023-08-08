@@ -21,6 +21,7 @@ import {
   isListType,
   isNonNullType,
   OperationDefinitionNode,
+  OperationTypeNode,
   SelectionNode,
 } from "graphql";
 import { addPath, Path, pathToArray } from "graphql/jsutils/Path";
@@ -276,6 +277,18 @@ const nextStage = Symbol();
 
 const resolveAbstractTypename = (source: any) => source.__typename;
 
+function getRootType(schema: GraphQLSchema, operation: OperationDefinitionNode): GraphQLObjectType | undefined | null {
+  if (operation.operation === OperationTypeNode.SUBSCRIPTION) {
+    return schema.getSubscriptionType();
+  }
+
+  if (operation.operation === OperationTypeNode.MUTATION) {
+    return schema.getMutationType();
+  }
+
+  return schema.getQueryType();
+}
+
 export function createExecuteFn<TDeferred>(
   backend: ExecutorBackend<TDeferred>,
 ): <T = any>(args: ExecutionArgs) => Promise<ExecutionResult<T>> {
@@ -295,14 +308,14 @@ export function createExecuteFn<TDeferred>(
      * 3. Execution of deferred fields should be batched
      */
 
-    const queryType = schema.getQueryType();
-    if (!queryType) {
-      throw new Error("missing Query type");
-    }
-
     const [operation, fragmentNodes] = extractOperationAndFragments(
       args.document,
     );
+
+    const rootType = getRootType(schema, operation);
+    if (!rootType) {
+      throw new Error(`missing ${operation.operation} type`);
+    }
 
     const ctx: ResolveContext = {
       schema,
@@ -321,7 +334,7 @@ export function createExecuteFn<TDeferred>(
 
       const completedFields: Array<{ path: Path; value: any; serialize: SerializeFunction }> = [];
 
-      let step1_resolve: Array<FieldToResolve<TDeferred>> = buildUnresolvedFields(schema, ctx.fragments, undefined, queryType, rootValue, operation.selectionSet.selections);
+      let step1_resolve: Array<FieldToResolve<TDeferred>> = buildUnresolvedFields(schema, ctx.fragments, undefined, rootType, rootValue, operation.selectionSet.selections);
       let step2_discriminate: Array<FieldToDiscriminate<TDeferred>> = [];
       let step3_validate: Array<FieldToValidate> = [];
       let step4_restage: Array<FieldToRestage> = [];
