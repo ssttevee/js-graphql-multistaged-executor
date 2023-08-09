@@ -1,4 +1,4 @@
-import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, Merge, errors } from "faunadb";
+import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, Merge, errors, ContainsField } from "faunadb";
 import {
   FieldNode,
   GraphQLError,
@@ -165,14 +165,22 @@ export default function createExecutorBackend(
             value,
             Lambda(
               varName,
-              dataContainer,
+              If(
+                ContainsField("@error", Var(varName)),
+                Var(varName),
+                dataContainer,
+              ),
             ),
           );
       } else {
         getDeferred = () =>
           Let(
             { [varName]: value },
-            dataContainer,
+            If(
+              ContainsField("@error", Var(varName)),
+              Var(varName),
+              dataContainer,
+            ),
           );
       }
 
@@ -253,6 +261,9 @@ export default function createExecutorBackend(
           setDeferred(getDeferred());
         },
       }));
+    },
+    getErrorMessage(value) {
+      return (value as any)?.["@error"] ?? null;
     },
   };
 }

@@ -66,6 +66,7 @@ export interface ExecutorBackend<TDeferred> {
     setDeferred: (data: TDeferred) => void,
   ): Array<ExpandedChild>;
   expandAbstractType?: (schema: GraphQLSchema, path: Path, abstractValue: TDeferred, abstractType: GraphQLAbstractType, setDeferred: (data: TDeferred) => void) => Array<ExpandedAbstractType>;
+  getErrorMessage?: (value: unknown) => string | null;
 }
 
 type SerializeFunction = (value: any) => unknown;
@@ -192,13 +193,25 @@ interface FieldToRevalidate extends BaseFieldContext {
   shouldExcludeResult?: ShouldExcludeResultPredicate;
 }
 
-function selectFromObject(obj: any, path: Array<string | number>): any {
-  return path.reduce((value, key) => value?.[key], obj);
+function selectFromObject(obj: any, path: Array<string | number>, getErrorMessage?: (value: any) => string | null): any {
+  for (const [i, key] of path.entries()) {
+    const errorMessage = getErrorMessage?.(obj);
+    if (errorMessage) {
+      throw new GraphQLError(errorMessage, {
+        path: path.slice(0, i),
+      });
+    }
+
+    obj = obj?.[key];
+  }
+
+  return obj;
 }
 
-function expandFromObject(obj: any, deferredPath: Array<string | number>, path: Path | undefined): Array<{ path: Path; value: any }> {
+function expandFromObject(obj: any, deferredPath: Array<string | number>, path: Path | undefined, getErrorMessage?: (value: any) => string | null): Array<{ path: Path; value: any }> {
+  const pathArray = pathToArray(path);
   const arrayCountFromDeferred = deferredPath.filter((p) => p === '[]').length;
-  const arrayCountFromPath = pathToArray(path).filter((p) => p === '[]').length;
+  const arrayCountFromPath = pathArray.filter((p) => p === '[]').length;
   if (arrayCountFromPath !== arrayCountFromDeferred) {
     throw new Error('expandFromObject: arraysFromPath !== arraysFromDeferred');
   }
@@ -208,7 +221,39 @@ function expandFromObject(obj: any, deferredPath: Array<string | number>, path: 
       throw new Error('expandFromObject: path is undefined');
     }
 
-    return [{ path, value: selectFromObject(obj, deferredPath) }];
+    try {
+      return [{ path, value: selectFromObject(obj, deferredPath, getErrorMessage) }];
+    } catch (err) {
+      if (err instanceof GraphQLError) {
+        const errPath = Array.from(err.path!);
+        if (typeof errPath[0] === 'number') {
+          errPath.shift();
+        }
+
+        const fixedDeferredPathLength = (deferredPath.length - (typeof deferredPath[0] === 'number' ? 1 : 0));
+        let realPath: Array<string | number>;
+        if (!errPath.length) {
+          realPath = pathArray.slice(0, -fixedDeferredPathLength);
+        } else {
+          let pos = -1;
+          do {
+            pos = pathArray.indexOf(errPath[0], pos + 1);
+            if (pos === -1) {
+              // give up
+              realPath = pathArray;
+              break;
+            }
+          } while (pathArray.slice(pos, pos + errPath.length).some((v, i) => v !== errPath[i]));
+          realPath = pathArray.slice(0, pos + errPath.length);
+        }
+
+        throw new GraphQLError(err.message, {
+          path: realPath,
+        });
+      }
+
+      throw err;
+    }
   }
 
   let pathPrefix = path;
@@ -287,6 +332,21 @@ function getRootType(schema: GraphQLSchema, operation: OperationDefinitionNode):
   }
 
   return schema.getQueryType();
+}
+
+function didParentError(path: Array<string | number>, errors: GraphQLError[]) {
+  return errors.some((error) => {
+    const errorPath = error.path;
+    if (!errorPath) {
+      return false;
+    }
+
+    if (path.length < errorPath.length) {
+      return false;
+    }
+
+    return Array.prototype.every.call(errorPath, (key, i) => key === path[i]);
+  });
 }
 
 export function createExecuteFn<TDeferred>(
@@ -720,6 +780,10 @@ export function createExecuteFn<TDeferred>(
                 continue;
               }
 
+              if (didParentError(pathToArray(prevPath), resultErrors)) {
+                continue;
+              }
+
               // console.log('step4_restage', pathToArray(prevPath), deferredPath, expandFromObject(deferredValues, deferredPath, prevPath));
 
               step1_resolve.push(
@@ -749,6 +813,10 @@ export function createExecuteFn<TDeferred>(
             const { fieldNode, fieldNodes, fieldType, fieldPath, deferredPath, parentType, shouldExcludeResult } = step5_revalidate.shift()!;
             try {
               if (shouldExcludeResult?.(deferredPath, deferredValues)) {
+                continue;
+              }
+
+              if (didParentError(pathToArray(fieldPath), resultErrors)) {
                 continue;
               }
 
