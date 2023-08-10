@@ -648,6 +648,11 @@ export function createExecuteFn<TDeferred>(
     
                 fieldType = fieldType.ofType;
               }
+
+              if (isNullValue(fieldValue)) {
+                completedFields.push({ path, value: null, serialize: identity });
+                continue;
+              }
     
               if (isListType(fieldType)) {
                 if (!Array.isArray(fieldValue)) {
