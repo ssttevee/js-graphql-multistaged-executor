@@ -392,7 +392,7 @@ export function createExecuteFn<TDeferred>(
     try {
       const resultErrors: GraphQLError[] = [];
 
-      const completedFields: Array<{ path: Path; value: any; serialize: SerializeFunction }> = [];
+      const completedFields: Array<{ path: Path; value: any; fieldNode: FieldNode; serialize: SerializeFunction }> = [];
 
       const step1_resolve: Array<FieldToResolve<TDeferred>> = buildUnresolvedFields(schema, ctx.fragments, undefined, rootType, rootValue, operation.selectionSet.selections);
       const step2_discriminate: Array<FieldToDiscriminate<TDeferred>> = [];
@@ -650,7 +650,7 @@ export function createExecuteFn<TDeferred>(
               }
 
               if (isNullValue(fieldValue)) {
-                completedFields.push({ path, value: null, serialize: identity });
+                completedFields.push({ path, value: null, fieldNode, serialize: identity });
                 continue;
               }
     
@@ -666,7 +666,7 @@ export function createExecuteFn<TDeferred>(
                     }
                   ));
                 } else if (fieldValue.length === 0) {
-                  completedFields.push({ path, value: fieldValue, serialize: identity });
+                  completedFields.push({ path, value: fieldValue, fieldNode, serialize: identity });
                 } else {
                   const elementFieldType = fieldType.ofType;
                   // console.log('step3_validate: send to step3_validate', pathToArray(path), fieldValue);
@@ -698,7 +698,7 @@ export function createExecuteFn<TDeferred>(
               }
     
               if (fieldType instanceof GraphQLScalarType || fieldType instanceof GraphQLEnumType) {
-                completedFields.push({ path, value: fieldValue, serialize: fieldType.serialize.bind(fieldType) ?? identity });
+                completedFields.push({ path, value: fieldValue, fieldNode, serialize: fieldType.serialize.bind(fieldType) ?? identity });
                 continue;
               }
     
@@ -864,7 +864,7 @@ export function createExecuteFn<TDeferred>(
       }
 
       const resultData: Record<string, any> = {};
-      for (const { path, value, serialize } of completedFields) {
+      for (const { path, value, serialize, fieldNode } of completedFields) {
         let parent: [any, string | number] | null = null;
         let container: Record<string, any> | Array<any> = resultData;
         const pathArray = pathToArray(path);
@@ -901,18 +901,14 @@ export function createExecuteFn<TDeferred>(
 
         try {
           parent[0][parent[1]] = await serialize(await value);
-        } catch (err) {
-          resultErrors.push(
-            err instanceof GraphQLError
-              ? err
-              : new GraphQLError(
-                  (err as any).message,
-                  {
-                    originalError: err as any,
-                    path: pathArray,
-                  },
-                ),
-          );
+        } catch (e) {
+          resultErrors.push(new GraphQLError((e as any)?.message ?? String(e), {
+            nodes: (e as any).nodes ?? fieldNode,
+            source: (e as any).source ?? fieldNode.loc?.source,
+            positions: (e as any).positions ?? (fieldNode.loc?.source && [fieldNode.loc.start]),
+            path: (e as any).path ?? pathToArray(path),
+            originalError: (e as any).originalError ?? (e as any),
+          }));
         }
       }
 
