@@ -665,6 +665,8 @@ export function createExecuteFn<TDeferred>(
                       path: pathToArray(path),
                     }
                   ));
+                } else if (fieldValue.length === 0) {
+                  completedFields.push({ path, value: fieldValue, serialize: identity });
                 } else {
                   const elementFieldType = fieldType.ofType;
                   // console.log('step3_validate: send to step3_validate', pathToArray(path), fieldValue);
