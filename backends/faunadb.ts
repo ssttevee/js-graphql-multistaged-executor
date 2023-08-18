@@ -43,9 +43,9 @@ async function unwrapResolvedValue(expr: any) {
 }
 
 export default function createExecutorBackend(
-  opts?: ClientConfig,
+  opts?: ClientConfig | Client,
 ): ExecutorBackend<Expr> {
-  const client = new Client(opts);
+  const client = opts instanceof Client ? opts : new Client(opts);
 
   const wrapSourceValue = (
     sourceValue: unknown,
