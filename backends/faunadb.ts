@@ -166,7 +166,10 @@ export default function createExecutorBackend(
             Lambda(
               varName,
               If(
-                ContainsField("@error", Var(varName)),
+                And(
+                  IsObject(Var(varName)),
+                  ContainsField("@error", Var(varName)),
+                ),
                 Var(varName),
                 dataContainer,
               ),
@@ -177,7 +180,10 @@ export default function createExecutorBackend(
           Let(
             { [varName]: value },
             If(
-              ContainsField("@error", Var(varName)),
+              And(
+                IsObject(Var(varName)),
+                ContainsField("@error", Var(varName)),
+              ),
               Var(varName),
               dataContainer,
             ),
