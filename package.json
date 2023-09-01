@@ -1,6 +1,6 @@
 {
   "name": "@ssttevee/graphql-multistage-executor",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "license": "MIT",
   "main": "./lib.cjs",
   "module": "./lib.mjs",
