@@ -1,7 +1,7 @@
 import { expect, test, beforeAll, afterAll } from '@jest/globals';
 import { exec } from "child_process";
-import { Concat, Map, Lambda, Var } from "faunadb";
-import { GraphQLEnumType, GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLScalarType, GraphQLSchema, GraphQLString, parse } from "graphql";
+import { Concat, Map, Lambda, Var, query as q } from "faunadb";
+import { GraphQLEnumType, GraphQLInterfaceType, GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLScalarType, GraphQLSchema, GraphQLString, parse } from "graphql";
 import { promisify } from "util";
 
 import { createExecuteFn } from "../executor";
@@ -10,7 +10,6 @@ import createExecutorBackend from "./faunadb";
 const JSONStringType = new GraphQLScalarType({
   name: "JSONString",
   serialize: (value) => {
-    console.log('serialize', value);
     return JSON.stringify(value);
   },
   parseValue: (value) => typeof value === "string" ? JSON.parse(value) : value,
@@ -24,9 +23,33 @@ const BooleanEnumType = new GraphQLEnumType({
   },
 })
 
+const StringInterfaceType = new GraphQLInterfaceType({
+  name: "StringInterface",
+  fields: () => ({
+    string: {
+      type: GraphQLString,
+    },
+  }),
+});
+
+const SimpleStringType = new GraphQLObjectType({
+  name: "SimpleString",
+  interfaces: [StringInterfaceType],
+  fields: () => ({
+    string: {
+      type: GraphQLString,
+      resolve: (src) => src.string,
+    },
+  }),
+});
+
 const WrappedStringType = new GraphQLObjectType({
   name: "WrappedString",
   fields: () => ({
+    string: {
+      type: GraphQLString,
+      resolve: (src) => src,
+    },
     deferred: {
       type: GraphQLString,
       resolve: (src) => src,
@@ -79,6 +102,16 @@ const QueryType = new GraphQLObjectType({
       },
       resolve: (_src, args) => `Hello ${args.name}`,
     },
+    helloInterface: {
+      type: StringInterfaceType,
+      args: {
+        name: {
+          type: new GraphQLNonNull(GraphQLString),
+          description: "Subject to greet",
+        },
+      },
+      resolve: (_src, args) => ({ __typename: "SimpleString", string: `Hello ${args.name}` }),
+    },
     helloWrapped: {
       type: WrappedStringType,
       args: {
@@ -103,6 +136,21 @@ const QueryType = new GraphQLObjectType({
       },
       resolve: (_src, args) =>
         args.names.map((name: string) => `Hello ${name}`),
+    },
+    helloAllInterface: {
+      type: new GraphQLNonNull(
+        new GraphQLList(new GraphQLNonNull(StringInterfaceType)),
+      ),
+      args: {
+        names: {
+          type: new GraphQLNonNull(
+            new GraphQLList(new GraphQLNonNull(GraphQLString)),
+          ),
+          description: "Subjects to greet",
+        },
+      },
+      resolve: (_src, args) =>
+        args.names.map((name: string) => ({ __typename: "SimpleString", string: `Hello ${name}` })),
     },
     helloAllWrapped: {
       type: new GraphQLNonNull(
@@ -133,6 +181,22 @@ const QueryType = new GraphQLObjectType({
           " ",
         ),
     },
+    helloDeferredInterface: {
+      type: StringInterfaceType,
+      args: {
+        name: {
+          type: new GraphQLNonNull(GraphQLString),
+          description: "Subject to greet",
+        },
+      },
+      resolve: (_src, args) => (q as any).wrap({
+        __typename: "SimpleString",
+        string: Concat(
+          ["Hello", args.name],
+          " ",
+        ),
+      }),
+    },
     helloAllDeferred: {
       type: new GraphQLNonNull(
         new GraphQLList(new GraphQLNonNull(GraphQLString)),
@@ -154,6 +218,33 @@ const QueryType = new GraphQLObjectType({
               ["Hello", Var("name")],
               " ",
             ),
+          ),
+        ),
+    },
+    helloAllDeferredInterface: {
+      type: new GraphQLNonNull(
+        new GraphQLList(new GraphQLNonNull(StringInterfaceType)),
+      ),
+      args: {
+        names: {
+          type: new GraphQLNonNull(
+            new GraphQLList(new GraphQLNonNull(GraphQLString)),
+          ),
+          description: "Subjects to greet",
+        },
+      },
+      resolve: (_src, args) =>
+        Map(
+          args.names,
+          Lambda(
+            "name",
+            {
+              __typename: "SimpleString",
+              string: Concat(
+                ["Hello", Var("name")],
+                " ",
+              ),
+            },
           ),
         ),
     },
@@ -204,7 +295,7 @@ const QueryType = new GraphQLObjectType({
 
 const schema = new GraphQLSchema({
   query: QueryType,
-  types: [QueryType, WrappedStringType],
+  types: [QueryType, WrappedStringType, SimpleStringType],
   directives: [],
 });
 
@@ -397,6 +488,34 @@ test("helloAllDeferred", async () => {
       helloAllDeferred: [
         "Hello world",
         "Hello jim",
+      ],
+    },
+  });
+});
+
+test("helloAllDeferredInterface", async () => {
+  const result = await execute({
+    schema,
+    document: parse(
+      `{ helloAllDeferredInterface(names: ["world", "jim"]) { string } }`,
+    ),
+    rootValue: null,
+  });
+  if (result.errors?.length) {
+    for (const err of result.errors) {
+      throw err.originalError ?? err;
+    }
+  }
+
+  expect(result).toEqual({
+    data: {
+      helloAllDeferredInterface: [
+        {
+          string: "Hello world",
+        },
+        {
+          string: "Hello jim",
+        },
       ],
     },
   });

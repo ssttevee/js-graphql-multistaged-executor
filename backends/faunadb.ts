@@ -1,4 +1,4 @@
-import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, Merge, errors, ContainsField } from "faunadb";
+import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, Merge, errors, ContainsField, IsArray, IsObject, And } from "faunadb";
 import {
   FieldNode,
   GraphQLError,
@@ -148,6 +148,7 @@ export default function createExecutorBackend(
       value: Expr,
       fieldNodes: readonly FieldNode[],
       setDeferred: (data: Expr) => void,
+      suppressArrayHandling?: boolean,
     ) => {
       const varName = pathToArray(path).join("_");
       const dataContainer: Record<string, any> = {};
@@ -157,9 +158,7 @@ export default function createExecutorBackend(
       }
 
       let getDeferred: () => Expr;
-      if (isListType(returnType)) {
-        returnType = returnType.ofType;
-        path = addPath(path, "[]", undefined);
+      if (!suppressArrayHandling && isListType(returnType)) {
         getDeferred = () =>
           Map(
             value,
@@ -190,6 +189,11 @@ export default function createExecutorBackend(
           );
       }
 
+      if (isListType(returnType)) {
+        returnType = returnType.ofType;
+        path = addPath(path, "[]", undefined);
+      }
+
       if (isNonNullType(returnType)) {
         returnType = returnType.ofType;
       }
@@ -218,7 +222,7 @@ export default function createExecutorBackend(
         };
       });
     },
-    expandAbstractType: (schema, path, deferredValue, abstractType, setDeferred) => {
+    expandAbstractType: (schema, path, deferredValue, abstractType, handleArray, setDeferred) => {
       let concreteTypes: readonly GraphQLObjectType[];
       if (abstractType instanceof GraphQLInterfaceType) {
         concreteTypes = findImplementors(schema, abstractType);
@@ -240,22 +244,34 @@ export default function createExecutorBackend(
           );
         }
 
-        return Let(
+        expr = Let(
           {
-            [varName]: deferredValue,
+            [varNameType]: Select("__typename", Var(varName), null)
           },
-          Let(
+          Merge(
+            expr,
             {
-              [varNameType]: Select("__typename", Var(varName), null)
-            },
-            Merge(
-              expr,
-              {
-                __typename: Var(varNameType),
-              }
-            ),
+              __typename: Var(varNameType),
+            }
           ),
         );
+
+        if (!handleArray) {
+          return Let(
+            {
+              [varName]: deferredValue,
+            },
+            expr,
+          );
+        }
+
+        return Map(
+          deferredValue,
+          Lambda(
+            varName,
+            expr,
+          ),
+        )
       };
 
       const sourceValue = Var(varName);
@@ -266,6 +282,7 @@ export default function createExecutorBackend(
           branches[concreteType.name] = expr;
           setDeferred(getDeferred());
         },
+        suppressArrayHandling: true,
       }));
     },
     getErrorMessage(value) {
