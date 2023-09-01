@@ -57,7 +57,7 @@ export interface ExecutorBackend<TDeferred> {
     getValue: () => Promise<unknown>,
   ): WrappedValue<any>;
   isDeferredValue(value: unknown): value is TDeferred;
-  resolveDeferredValues(values: Array<[TDeferred, Path]>): Promise<unknown[]>;
+  resolveDeferredValues(values: Array<[TDeferred, Path]>, observer?: (metrics: any) => void): Promise<unknown[]>;
   expandChildren(
     path: Path,
     returnType: GraphQLOutputType,
@@ -777,7 +777,7 @@ export function createExecuteFn<TDeferred>(
         }
 
         if (deferredExprs.length) {
-          const deferredValues = await backend.resolveDeferredValues(deferredExprs);
+          const deferredValues = await backend.resolveDeferredValues(deferredExprs, (contextValue as any)?.observer);
           // console.log(`resolved ${deferredExprs.length} deferred values`, deferredValues);
 
           while (step4_restage.length) {

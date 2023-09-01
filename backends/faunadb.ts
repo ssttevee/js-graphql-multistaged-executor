@@ -32,7 +32,7 @@ async function unwrapResolvedValue(expr: any) {
   } else if (Array.isArray(expr)) {
     for (let [i, result] of (await Promise.all(expr.map(unwrapResolvedValue))).entries()) {
       expr[i] = result;
-    };
+    }
   } else if (expr instanceof Object) {
     for (let [k, v] of (await Promise.all(Object.entries(expr).map(async ([k, v]) => [k, await unwrapResolvedValue(v)])))) {
       expr[k] = v;
@@ -91,11 +91,11 @@ export default function createExecutorBackend(
   };
 
   return {
-    resolveDeferredValues: async (input) => {
+    resolveDeferredValues: async (input, observer) => {
       const query = Array.from(input, ([expr]) => expr);
       const paths = Array.from(input, ([, path]) => pathToArray(path));
       try {
-        return await client.query(query);
+        return await client.query(query, { observer });
       } catch (e) {
         if (!(e instanceof errors.FaunaHTTPError)) {
           throw e;
