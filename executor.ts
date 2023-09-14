@@ -29,6 +29,8 @@ import { extractOperationAndFragments } from "./ast";
 import { FragmentDefinitionMap, selectionFields } from "./selection";
 import { resolveArguments } from "./arguments";
 import { getFieldDef } from "graphql/execution/execute";
+import { expandFromObject, ShouldExcludeResultPredicate } from "./expand";
+import { selectFromObject } from "./utils";
 
 export type WrappedValue<T> = PromiseLike<T> & (
   T extends Array<infer E> ? Array<WrappedValue<E>> :
@@ -117,7 +119,7 @@ function fieldNodeKey(node: FieldNode): string {
   return node.alias?.value ?? node.name.value;
 }
 
-const neverResolves = new Promise<never>(() => {});
+const neverResolves = new Promise<never>(() => { });
 
 function buildUnresolvedFields(
   schema: GraphQLSchema,
@@ -155,10 +157,6 @@ interface BaseFieldContext {
   parentType: GraphQLObjectType;
 }
 
-interface ShouldExcludeResultPredicate {
-  (deferredPath: Array<string | number>, deferredValue: any): boolean;
-}
-
 interface FieldToResolve<TDeferred> extends BaseFieldContext {
   prevPath: Path | undefined;
   sourceValue: any;
@@ -193,126 +191,6 @@ interface FieldToRevalidate extends BaseFieldContext {
   fieldPath: Path;
   deferredPath: Array<string | number>;
   shouldExcludeResult?: ShouldExcludeResultPredicate;
-}
-
-function selectFromObject(obj: any, path: Array<string | number>, getErrorMessage?: (value: any) => string | null): any {
-  for (const [i, key] of path.entries()) {
-    const errorMessage = getErrorMessage?.(obj);
-    if (errorMessage) {
-      throw new GraphQLError(errorMessage, {
-        path: path.slice(0, i),
-      });
-    }
-
-    obj = obj?.[key];
-  }
-
-  return obj;
-}
-
-function expandFromObject(obj: any, deferredPath: Array<string | number>, path: Path | undefined, shouldExcludeResult: ShouldExcludeResultPredicate | undefined, resultErrors: readonly GraphQLError[], getErrorMessage?: (value: any) => string | null): Array<{ path: Path; value: any }> {
-  if (shouldExcludeResult?.(deferredPath, obj)) {
-    return [];
-  }
-
-  if (didParentError(pathToArray(path), resultErrors)) {
-    return [];
-  }
-
-  const pathArray = pathToArray(path);
-  const arrayCountFromDeferred = deferredPath.filter((p) => p === '[]').length;
-  const arrayCountFromPath = pathArray.filter((p) => p === '[]').length;
-  if (arrayCountFromPath !== arrayCountFromDeferred) {
-    throw new Error('expandFromObject: arraysFromPath !== arraysFromDeferred');
-  }
-
-  if (!arrayCountFromDeferred) {
-    if (!path) {
-      throw new Error('expandFromObject: path is undefined');
-    }
-
-    try {
-      return [{ path, value: selectFromObject(obj, deferredPath, getErrorMessage) }];
-    } catch (err) {
-      if (err instanceof GraphQLError) {
-        const errPath = Array.from(err.path!);
-        if (typeof errPath[0] === 'number') {
-          errPath.shift();
-        }
-
-        const fixedDeferredPathLength = (deferredPath.length - (typeof deferredPath[0] === 'number' ? 1 : 0));
-        let realPath: Array<string | number>;
-        if (!errPath.length) {
-          realPath = pathArray.slice(0, -fixedDeferredPathLength);
-        } else {
-          let pos = -1;
-          do {
-            pos = pathArray.indexOf(errPath[0], pos + 1);
-            if (pos === -1) {
-              // give up
-              realPath = pathArray;
-              break;
-            }
-          } while (pathArray.slice(pos, pos + errPath.length).some((v, i) => v !== errPath[i]));
-          realPath = pathArray.slice(0, pos + errPath.length);
-        }
-
-        throw new GraphQLError(err.message, {
-          path: realPath,
-        });
-      }
-
-      throw err;
-    }
-  }
-
-  let pathPrefix = path;
-  let pathSuffix: Path | undefined;
-  for (let i = 0; i < arrayCountFromPath; i++) {
-    if (pathSuffix) {
-      pathSuffix = addPath(pathSuffix, '[]', undefined);
-    }
-
-    while (true) {
-      if (!pathPrefix) {
-        throw new Error('expandFromObject: path is too short');
-      }
-
-      if (pathPrefix.key === '[]') {
-        break;
-      }
-
-      pathSuffix = addPath(pathSuffix, pathPrefix.key, pathPrefix.typename);
-      pathPrefix = pathPrefix.prev;
-    }
-
-    pathPrefix = pathPrefix.prev;
-  }
-
-  const indexPlaceholderPos = deferredPath.indexOf('[]');
-  const arrayPath = deferredPath.slice(0, indexPlaceholderPos);
-  const arrayValue = selectFromObject(obj, arrayPath);
-  if (!Array.isArray(arrayValue)) {
-    throw new Error("expandFromObject: !Array.isArray(arrayValue)");
-  }
-
-  return arrayValue.flatMap((elem, index) => {
-    let elemPath = addPath(pathPrefix, index, undefined);
-    let elemPathSuffix = pathSuffix;
-    while (elemPathSuffix) {
-      elemPath = addPath(elemPath, elemPathSuffix.key, elemPathSuffix.typename);
-      elemPathSuffix = elemPathSuffix.prev;
-    }
-
-    const nextDeferredPath = deferredPath.slice(indexPlaceholderPos + 1);
-    let shouldExcludeResultFn = shouldExcludeResult;
-    if (shouldExcludeResultFn) {
-      const originalFn = shouldExcludeResultFn;
-      shouldExcludeResultFn = (deferredPath) => originalFn([...arrayPath, index, ...deferredPath], obj);
-    }
-
-    return expandFromObject(elem, nextDeferredPath, elemPath, shouldExcludeResult, resultErrors, getErrorMessage);
-  });
 }
 
 /**
@@ -559,7 +437,7 @@ export function createExecuteFn<TDeferred>(
                     ...rest,
                     concreteType,
                     selectedFieldNodes: selectionFields(ctx.schema, ctx.fragments, fieldNode.selectionSet?.selections ?? [], concreteType),
-                }));
+                  }));
 
                 const typeFieldsMap = Object.fromEntries(
                   expanded.map(
@@ -572,25 +450,25 @@ export function createExecuteFn<TDeferred>(
 
                 const thisDeferredPath = deferredPath;
                 const shouldExcludeResultNext = (deferredPath: Array<string | number>, deferredValue: any) => {
-                    if (shouldExcludeResult?.(deferredPath, deferredValue)) {
-                      return true;
-                    }
+                  if (shouldExcludeResult?.(deferredPath, deferredValue)) {
+                    return true;
+                  }
 
-                    if (thisDeferredPath.length > deferredPath.length || !thisDeferredPath.every((v, i) => v === deferredPath[i])) {
-                      return false;
-                    }
+                  if (thisDeferredPath.length > deferredPath.length || !thisDeferredPath.every((v, i) => v === deferredPath[i])) {
+                    return false;
+                  }
 
-                    let path = thisDeferredPath;
-                    const key = deferredPath[thisDeferredPath.length] as string;
-                    if (key === '[]') {
-                      return false;
-                    } else if (typeof key === 'number') {
-                      path = [...path, key];
-                    }
+                  let path = thisDeferredPath;
+                  const key = deferredPath[thisDeferredPath.length] as string;
+                  if (key === '[]') {
+                    return false;
+                  } else if (typeof key === 'number') {
+                    path = [...path, key];
+                  }
 
-                    const value = selectFromObject(deferredValue, path)?.__typename;
+                  const value = selectFromObject(deferredValue, path)?.__typename;
 
-                    return !typeFieldsMap[value]?.has(key);
+                  return !typeFieldsMap[value]?.has(key);
                 }
 
 
@@ -672,7 +550,7 @@ export function createExecuteFn<TDeferred>(
                   ));
                   continue;
                 }
-    
+
                 fieldType = fieldType.ofType;
               }
 
@@ -680,7 +558,7 @@ export function createExecuteFn<TDeferred>(
                 completedFields.push({ path, value: null, fieldNode, serialize: identity });
                 continue;
               }
-    
+
               if (isListType(fieldType)) {
                 if (!Array.isArray(fieldValue)) {
                   resultErrors.push(new GraphQLError(
@@ -706,8 +584,8 @@ export function createExecuteFn<TDeferred>(
                     path: addPath(path, index, undefined),
                   })));
                 }
-    
-    
+
+
                 continue;
               } else {
                 if (Array.isArray(fieldValue) && !(fieldType instanceof GraphQLScalarType)) {
@@ -723,12 +601,12 @@ export function createExecuteFn<TDeferred>(
                   continue;
                 }
               }
-    
+
               if (fieldType instanceof GraphQLScalarType || fieldType instanceof GraphQLEnumType) {
                 completedFields.push({ path, value: fieldValue, fieldNode, serialize: fieldType.serialize.bind(fieldType) ?? identity });
                 continue;
               }
-    
+
               let concreteType: GraphQLObjectType;
               if (fieldType instanceof GraphQLInterfaceType || fieldType instanceof GraphQLUnionType) {
                 const resolveType = fieldType.resolveType ?? args.typeResolver ?? defaultTypeResolver;
@@ -747,7 +625,7 @@ export function createExecuteFn<TDeferred>(
                   ),
                   fieldType,
                 );
-    
+
                 const resolvedType = typeName && schema.getType(typeName);
                 if (!resolvedType || !(resolvedType instanceof GraphQLObjectType)) {
                   resultErrors.push(new GraphQLError(
@@ -779,7 +657,7 @@ export function createExecuteFn<TDeferred>(
                 ));
                 continue;
               }
-    
+
               // console.log('step3_validate: send to step1_resolve', pathToArray(path), fieldValue);
               step1_resolve.push(
                 ...buildUnresolvedFields(
@@ -845,8 +723,11 @@ export function createExecuteFn<TDeferred>(
                     fieldType,
                     fieldValue: value,
                     parentType,
-                    path: path,
+                    // ts is not happy that path might be undefined, but it's guaranteed to be defined as long as the
+                    // last path element is not an array index placeholder, which is not possible in graphql
+                    path: path!,
                   });
+                
                 }),
               );
             } catch (e) {
@@ -882,7 +763,7 @@ export function createExecuteFn<TDeferred>(
                 throw new Error('Expected parent');
               }
 
-            container = ((parent[0][parent[1]] as any) = []);
+              container = ((parent[0][parent[1]] as any) = []);
             } else if (!Array.isArray(container)) {
               throw new Error('Expected array');
             }

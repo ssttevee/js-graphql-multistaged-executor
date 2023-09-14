@@ -1,4 +1,4 @@
-import { GraphQLInterfaceType, GraphQLObjectType, GraphQLSchema } from "graphql";
+import { GraphQLError, GraphQLInterfaceType, GraphQLObjectType, GraphQLSchema } from "graphql";
 
 const implementorsCache = new WeakMap<GraphQLInterfaceType, readonly GraphQLObjectType[]>();
 
@@ -23,4 +23,19 @@ export function findImplementors(schema: GraphQLSchema, iface: GraphQLInterfaceT
   }
 
   return implementors;
+}
+
+export function selectFromObject(obj: any, path: Array<string | number>, getErrorMessage?: (value: any) => string | null): any {
+  for (const [i, key] of path.entries()) {
+    const errorMessage = getErrorMessage?.(obj);
+    if (errorMessage) {
+      throw new GraphQLError(errorMessage, {
+        path: path.slice(0, i),
+      });
+    }
+
+    obj = obj?.[key];
+  }
+
+  return obj;
 }

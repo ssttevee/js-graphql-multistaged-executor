@@ -10,11 +10,13 @@ export default [
     output: [
       {
         entryFileNames: "[name].mjs",
+        chunkFileNames: "[name]-[hash].mjs",
         format: "esm",
         dir: './',
       },
       {
         entryFileNames: "[name].cjs",
+        chunkFileNames: "[name]-[hash].cjs",
         format: "cjs",
         dir: './',
       },
