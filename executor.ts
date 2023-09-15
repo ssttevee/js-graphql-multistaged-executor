@@ -383,7 +383,7 @@ export function createExecuteFn<TDeferred>(
           while (step2_discriminate.length) {
             const { fieldNode, fieldNodes, fieldValue, fieldType, parentType, path, deferral, shouldExcludeResult } = step2_discriminate.shift()!;
             try {
-              if (!backend.isDeferredValue(fieldValue)) {
+              if (!backend.isDeferredValue(fieldValue) && !pathToArray(path).includes('[]')) {
                 // console.log('step2_discriminate: send to step3_validate', pathToArray(path), fieldValue);
                 step3_validate.push({ fieldType, fieldValue, parentType, fieldNode, fieldNodes, path });
                 continue;
