@@ -68,11 +68,11 @@ function resolveArgument(
 
     if (valueNode.kind === Kind.VARIABLE) {
       const variableName = valueNode.name.value;
-      if (!variables || !(variableName in variables)) {
+      if (isNonNullType(type) && (!variables || !(variableName in variables))) {
         throw new GraphQLError("found undefined variable: " + variableName);
       }
 
-      return parseVariableValue(variables[variableName], type);
+      return parseVariableValue(variables?.[variableName], type);
     }
 
     if (isListType(type)) {
