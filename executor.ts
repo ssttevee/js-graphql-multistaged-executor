@@ -704,7 +704,7 @@ export function createExecuteFn<TDeferred>(
             try {
               const [finishedValues, nextValues] = partition(
                 expandFromObject(deferredValues, deferredPath, prevPath, shouldExcludeResult, resultErrors, backend.getErrorMessage),
-                ({ path }) => path?.prev?.key !== prevPath?.key,
+                ({ path }) => path?.key !== prevPath?.key,
               );
               completedFields.push(
                 ...finishedValues.map(({ path, value }) => {
@@ -752,7 +752,7 @@ export function createExecuteFn<TDeferred>(
             try {
               const [finishedValues, nextValues] = partition(
                 expandFromObject(deferredValues, deferredPath, fieldPath, shouldExcludeResult, resultErrors, backend.getErrorMessage),
-                ({ path }) => path?.prev?.key !== fieldPath.key,
+                ({ path }) => path?.key !== fieldPath.key,
               );
               completedFields.push(
                 ...finishedValues.map(({ path, value }) => {
