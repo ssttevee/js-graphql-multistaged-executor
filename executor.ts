@@ -760,7 +760,7 @@ export function createExecuteFn<TDeferred>(
             try {
               const [finishedValues, nextValues] = partition(
                 expandFromObject(deferredValues, deferredPath, fieldPath, shouldExcludeResult, resultErrors, backend.getErrorMessage),
-                ({ path }) => equivalentPathKey(path?.key, fieldPath.key),
+                ({ path }) => !equivalentPathKey(path?.key, fieldPath.key),
               );
               completedFields.push(
                 ...finishedValues.map(({ path, value }) => {
