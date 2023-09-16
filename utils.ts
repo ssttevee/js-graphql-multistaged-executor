@@ -39,3 +39,20 @@ export function selectFromObject(obj: any, path: Array<string | number>, getErro
 
   return obj;
 }
+
+export function partition<T, U>(arr: Array<T | U>, predicate: (item: T | U) => item is T): [T[], U[]];
+export function partition<T>(arr: Array<T>, predicate: (item: T) => boolean): [T[], T[]];
+export function partition(arr: Array<any>, predicate: (item: any) => boolean): [any[], any[]] {
+  const a: any[] = [];
+  const b: any[] = [];
+
+  for (const item of arr) {
+    if (predicate(item)) {
+      a.push(item);
+    } else {
+      b.push(item);
+    }
+  }
+
+  return [a, b];
+}

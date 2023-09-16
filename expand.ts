@@ -67,7 +67,7 @@ outer:
   return false;
 }
 
-export function expandFromObject(obj: any, deferredPath: Array<string | number>, path: Path | undefined, shouldExcludeResult: ShouldExcludeResultPredicate | undefined, resultErrors: readonly GraphQLError[], getErrorMessage?: (value: any) => string | null): Array<{ path: Path | undefined; value: any }> {
+export function expandFromObject(obj: any, deferredPath: Array<string | number>, path: Path | undefined, shouldExcludeResult: ShouldExcludeResultPredicate | undefined, resultErrors: readonly GraphQLError[], getErrorMessage?: (value: any) => string | null): Array<{ path: Path; value: any }> {
   if (shouldExcludeResult?.(deferredPath, obj)) {
     return [];
   }
@@ -87,7 +87,7 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
   if (!arrayCountFromDeferred) {
     // base case (no arrays in deferredPath)
     try {
-      return [{ path, value: selectFromObject(obj, deferredPath, getErrorMessage) }];
+      return [{ path: path!, value: selectFromObject(obj, deferredPath, getErrorMessage) }];
     } catch (err) {
       if (err instanceof GraphQLError) {
         const errPath = Array.from(err.path!);
@@ -160,6 +160,15 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
   }
 
   pathPrefix = pathPrefix.prev;
+  if (!arrayValue.length) {
+      return [
+          {
+              path: pathPrefix!,
+              value: arrayValue,
+          }
+      ];
+  }
+
   pathSuffix = reversePath(pathSuffix);
 
   // recurse for each array element

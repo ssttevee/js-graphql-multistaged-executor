@@ -30,7 +30,7 @@ import { FragmentDefinitionMap, selectionFields } from "./selection";
 import { resolveArguments } from "./arguments";
 import { getFieldDef } from "graphql/execution/execute";
 import { expandFromObject, ShouldExcludeResultPredicate } from "./expand";
-import { selectFromObject } from "./utils";
+import { partition, selectFromObject } from "./utils";
 
 export type WrappedValue<T> = PromiseLike<T> & (
   T extends Array<infer E> ? Array<WrappedValue<E>> :
@@ -125,7 +125,7 @@ function buildUnresolvedFields(
   schema: GraphQLSchema,
   fragmentMap: FragmentDefinitionMap,
   prevPath: Path | undefined,
-  parentType: GraphQLObjectType,
+  parentType: ParentType,
   sourceValue: any,
   selectionNodes: readonly SelectionNode[]
 ) {
@@ -133,7 +133,7 @@ function buildUnresolvedFields(
     schema,
     fragmentMap,
     selectionNodes,
-    parentType,
+    parentType.type,
   ).map(
     (
       fieldNode,
@@ -151,10 +151,15 @@ function buildUnresolvedFields(
   );
 }
 
+interface ParentType {
+  type: GraphQLObjectType;
+  parent?: ParentType;
+}
+
 interface BaseFieldContext {
   fieldNode: FieldNode;
   fieldNodes: readonly FieldNode[];
-  parentType: GraphQLObjectType;
+  parentType: ParentType;
 }
 
 interface FieldToResolve<TDeferred> extends BaseFieldContext {
@@ -288,9 +293,9 @@ export function createExecuteFn<TDeferred>(
     try {
       const resultErrors: GraphQLError[] = [];
 
-      const completedFields: Array<{ path: Path; value: any; fieldNode: FieldNode; serialize: SerializeFunction }> = [];
+      const completedFields: Array<{ path: Path; value: any; fieldNode?: FieldNode; serialize: SerializeFunction }> = [];
 
-      const step1_resolve: Array<FieldToResolve<TDeferred>> = buildUnresolvedFields(schema, ctx.fragments, undefined, rootType, rootValue, operation.selectionSet.selections);
+      const step1_resolve: Array<FieldToResolve<TDeferred>> = buildUnresolvedFields(schema, ctx.fragments, undefined, { type: rootType }, rootValue, operation.selectionSet.selections);
       const step2_discriminate: Array<FieldToDiscriminate<TDeferred>> = [];
       const step3_validate: Array<FieldToValidate> = [];
 
@@ -304,9 +309,9 @@ export function createExecuteFn<TDeferred>(
           while (step1_resolve.length) {
             const { fieldNode, fieldNodes, prevPath, parentType, sourceValue: originalSourceValue, deferral, overrideFieldResolver, shouldExcludeResult } = step1_resolve.shift()!;
             const fieldKey = fieldNodeKey(fieldNode);
-            const path = addPath(prevPath, fieldKey, parentType.name);
+            const path = addPath(prevPath, fieldKey, parentType.type.name);
             try {
-              const fieldDef = getFieldDef(schema, parentType, fieldNode)!;
+              const fieldDef = getFieldDef(schema, parentType.type, fieldNode)!;
               const resolveField = overrideFieldResolver ?? fieldDef.resolve ?? args.fieldResolver ?? defaultFieldResolver;
 
               let sourceValue = await originalSourceValue;
@@ -333,7 +338,7 @@ export function createExecuteFn<TDeferred>(
                       fieldNode,
                       fieldNodes,
                       path,
-                      parentType,
+                      parentType: parentType.type,
                     },
                     fieldDef.type,
                   ),
@@ -510,7 +515,10 @@ export function createExecuteFn<TDeferred>(
                   fieldNode: child.fieldNode,
                   fieldNodes: selectedFieldNodes,
                   prevPath: child.path,
-                  parentType: concreteType,
+                  parentType: {
+                    type: concreteType,
+                    parent: parentType,
+                  },
                   sourceValue: child.sourceValue,
                   overrideFieldResolver: child.fieldNode.name.value === '__typename' && concreteType !== namedFieldType ? resolveAbstractTypename : undefined,
                   shouldExcludeResult,
@@ -555,6 +563,7 @@ export function createExecuteFn<TDeferred>(
               }
 
               if (isNullValue(fieldValue)) {
+                // console.log('step3_validate: send to completedFields (1)', pathToArray(path), fieldValue);
                 completedFields.push({ path, value: null, fieldNode, serialize: identity });
                 continue;
               }
@@ -571,6 +580,7 @@ export function createExecuteFn<TDeferred>(
                     }
                   ));
                 } else if (fieldValue.length === 0) {
+                  // console.log('step3_validate: send to completedFields (2)', pathToArray(path), fieldValue);
                   completedFields.push({ path, value: fieldValue, fieldNode, serialize: identity });
                 } else {
                   const elementFieldType = fieldType.ofType;
@@ -603,6 +613,7 @@ export function createExecuteFn<TDeferred>(
               }
 
               if (fieldType instanceof GraphQLScalarType || fieldType instanceof GraphQLEnumType) {
+                // console.log('step3_validate: send to completedFields (3)', pathToArray(path), fieldValue);
                 completedFields.push({ path, value: fieldValue, fieldNode, serialize: fieldType.serialize.bind(fieldType) ?? identity });
                 continue;
               }
@@ -619,7 +630,7 @@ export function createExecuteFn<TDeferred>(
                       fieldNode,
                       fieldNodes,
                       path,
-                      parentType,
+                      parentType: parentType.type,
                     },
                     fieldType,
                   ),
@@ -664,7 +675,10 @@ export function createExecuteFn<TDeferred>(
                   schema,
                   ctx.fragments,
                   path,
-                  concreteType,
+                  {
+                    type: concreteType,
+                    parent: parentType,
+                  },
                   fieldValue,
                   fieldNode.selectionSet.selections,
                 ),
@@ -688,13 +702,35 @@ export function createExecuteFn<TDeferred>(
           while (step4_restage.length) {
             const { fieldNode, fieldNodes, parentType, prevPath, deferredPath, shouldExcludeResult } = step4_restage.shift()!;
             try {
+              const [finishedValues, nextValues] = partition(
+                expandFromObject(deferredValues, deferredPath, prevPath, shouldExcludeResult, resultErrors, backend.getErrorMessage),
+                ({ path }) => path?.prev?.key !== prevPath?.key,
+              );
+              completedFields.push(
+                ...finishedValues.map(({ path, value }) => {
+                  // console.log('step4_restage: send to completedFields', pathToArray(path), value);
+                  return ({
+                    path: path!,
+                    value,
+                    serialize: identity,
+                  });
+                }),
+              );
+
               step1_resolve.push(
-                ...expandFromObject(deferredValues, deferredPath, prevPath, shouldExcludeResult, resultErrors, backend.getErrorMessage).flatMap(({ path, value }) => {
+                ...nextValues.flatMap(({ path, value }) => {
                   // console.log('step4_restage: send to step1_resolve', pathToArray(path), value);
                   return [{
+                    // TODO: field nodes are probably invalid when prevPath.length !== path.length
                     fieldNode,
                     fieldNodes,
-                    parentType,
+                    parentType: pathToArray(prevPath).slice(pathToArray(path).length).reduce((parentType) => {
+                      if (!parentType.parent) {
+                        throw new Error('Expected parent');
+                      }
+
+                      return parentType.parent;
+                    }, parentType),
                     prevPath: path,
                     sourceValue: value,
                   }];
@@ -714,15 +750,36 @@ export function createExecuteFn<TDeferred>(
           while (step5_revalidate.length) {
             const { fieldNode, fieldNodes, fieldType, fieldPath, deferredPath, parentType, shouldExcludeResult } = step5_revalidate.shift()!;
             try {
+              const [finishedValues, nextValues] = partition(
+                expandFromObject(deferredValues, deferredPath, fieldPath, shouldExcludeResult, resultErrors, backend.getErrorMessage),
+                ({ path }) => path?.prev?.key !== fieldPath.key,
+              );
+              completedFields.push(
+                ...finishedValues.map(({ path, value }) => {
+                  // console.log('step5_revalidate: send to completedFields', pathToArray(path), value);
+                  return ({
+                    path: path!,
+                    value,
+                    serialize: identity,
+                  });
+                }),
+              );
+
               step3_validate.push(
-                ...expandFromObject(deferredValues, deferredPath, fieldPath, shouldExcludeResult, resultErrors, backend.getErrorMessage).map(({ path, value }) => {
+                ...nextValues.map(({ path, value }) => {
                   // console.log('step5_revalidate: send to step3_validate', pathToArray(path), value);
                   return ({
                     fieldNode,
                     fieldNodes,
                     fieldType,
                     fieldValue: value,
-                    parentType,
+                    parentType: pathToArray(fieldPath).slice(pathToArray(path).length).reduce((parentType) => {
+                      if (!parentType.parent) {
+                        throw new Error('Expected parent');
+                      }
+
+                      return parentType.parent;
+                    }, parentType),
                     // ts is not happy that path might be undefined, but it's guaranteed to be defined as long as the
                     // last path element is not an array index placeholder, which is not possible in graphql
                     path: path!,
@@ -792,8 +849,8 @@ export function createExecuteFn<TDeferred>(
         } catch (e) {
           resultErrors.push(new GraphQLError((e as any)?.message ?? String(e), {
             nodes: (e as any).nodes ?? fieldNode,
-            source: (e as any).source ?? fieldNode.loc?.source,
-            positions: (e as any).positions ?? (fieldNode.loc?.source && [fieldNode.loc.start]),
+            source: (e as any).source ?? fieldNode?.loc?.source,
+            positions: (e as any).positions ?? (fieldNode?.loc?.source && [fieldNode?.loc.start]),
             path: (e as any).path ?? pathToArray(path),
             originalError: (e as any).originalError ?? (e as any),
           }));
