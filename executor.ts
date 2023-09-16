@@ -121,6 +121,14 @@ function fieldNodeKey(node: FieldNode): string {
 
 const neverResolves = new Promise<never>(() => { });
 
+function equivalentPathKey(a: string | number | undefined, b: string | number | undefined): boolean {
+  return (
+    a === b ||
+    (typeof a === 'number' && b === '[]') ||
+    (a === '[]' && typeof b === 'number')
+  )
+}
+
 function buildUnresolvedFields(
   schema: GraphQLSchema,
   fragmentMap: FragmentDefinitionMap,
@@ -704,7 +712,7 @@ export function createExecuteFn<TDeferred>(
             try {
               const [finishedValues, nextValues] = partition(
                 expandFromObject(deferredValues, deferredPath, prevPath, shouldExcludeResult, resultErrors, backend.getErrorMessage),
-                ({ path }) => path?.key !== prevPath?.key,
+                ({ path }) => !equivalentPathKey(path?.key, prevPath?.key),
               );
               completedFields.push(
                 ...finishedValues.map(({ path, value }) => {
@@ -752,7 +760,7 @@ export function createExecuteFn<TDeferred>(
             try {
               const [finishedValues, nextValues] = partition(
                 expandFromObject(deferredValues, deferredPath, fieldPath, shouldExcludeResult, resultErrors, backend.getErrorMessage),
-                ({ path }) => path?.key !== fieldPath.key,
+                ({ path }) => equivalentPathKey(path?.key, fieldPath.key),
               );
               completedFields.push(
                 ...finishedValues.map(({ path, value }) => {
