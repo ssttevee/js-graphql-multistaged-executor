@@ -125,6 +125,8 @@ export default function createExecutorBackend(
 
               responseErr.description = responseErr.description.replace('the function', JSON.stringify(errQuery.call))
               cause = responseErr.cause;
+          } else {
+            cause = { position: faunapath.slice(1) };
           }
 
           return new GraphQLError(responseErr.description + ': ' + JSON.stringify(cause), {
