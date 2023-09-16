@@ -132,7 +132,12 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
   const arrayPath = deferredPath.slice(0, indexPlaceholderPos);
   const arrayValue = selectFromObject(obj, arrayPath);
   if (!Array.isArray(arrayValue)) {
-    throw new Error("expandFromObject: !Array.isArray(arrayValue)");
+    throw new GraphQLError(
+        `Expected array but got ${JSON.stringify(arrayValue)}`,
+        {
+            path: arrayPath,
+        },
+    );
   }
 
   // splice the path at the first array index placeholder, so it can be rebuild with a real index for each array element
@@ -166,13 +171,23 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
       shouldExcludeResultFn = (deferredPath) => originalFn([...arrayPath, index, ...deferredPath], obj);
     }
 
-    return expandFromObject(elem, deferredPath.slice(indexPlaceholderPos + 1), pathSuffix, shouldExcludeResult, resultErrors, getErrorMessage)
-      .map(({ path: childPath, value }) => {
-        return {
-          // add the path prefix with the real index back
-          path: concatPath(addPath(pathPrefix, index, undefined), childPath),
-          value,
-        };
+    try {
+      return expandFromObject(elem, deferredPath.slice(indexPlaceholderPos + 1), pathSuffix, shouldExcludeResult, resultErrors, getErrorMessage)
+        .map(({ path: childPath, value }) => {
+          return {
+            // add the path prefix with the real index back
+            path: concatPath(addPath(pathPrefix, index, undefined), childPath),
+            value,
+          };
+        });
+    } catch (err) {
+      if (!(err instanceof GraphQLError) || !err.path) {
+          throw err;
+      }
+
+      throw new GraphQLError(err.message, {
+        path: [...pathToArray(pathPrefix), index, ...err.path],
       });
+    }
   });
 }
