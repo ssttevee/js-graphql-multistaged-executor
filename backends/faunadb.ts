@@ -247,16 +247,19 @@ export default function createExecutorBackend(
           );
         }
 
-        expr = Let(
-          {
-            [varNameType]: Select("__typename", Var(varName), null)
-          },
-          Merge(
-            expr,
+        expr = wrapChildObject(
+          varName,
+          Let(
             {
-              __typename: Var(varNameType),
-            }
-          ),
+              [varNameType]: Select("__typename", Var(varName), null)
+            },
+            Merge(
+              expr,
+              {
+                __typename: Var(varNameType),
+              }
+            ),
+          )
         );
 
         if (!handleArray) {
