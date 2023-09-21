@@ -1,6 +1,6 @@
 {
   "name": "@ssttevee/graphql-multistage-executor",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "license": "MIT",
   "main": "./lib.cjs",
   "module": "./lib.mjs",
@@ -15,7 +15,7 @@
     "*.d.ts"
   ],
   "scripts": {
-    "clean": "rm -f *.cjs *.d.ts *.mjs backends/*.cjs backends/*.d.ts backends/*.mjs",
+    "clean": "rm -f *.cjs *.d.ts *.mjs *.tgz backends/*.cjs backends/*.d.ts backends/*.mjs",
     "prepack": "npm run clean && npm run build",
     "build": "rollup -c",
     "pretest": "npm run clean",
