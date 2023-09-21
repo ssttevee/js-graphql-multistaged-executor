@@ -475,9 +475,20 @@ export function createExecuteFn<TDeferred>(
                     path = [...path, key];
                   }
 
-                  const value = selectFromObject(deferredValue, path)?.__typename;
+                  const value = selectFromObject(deferredValue, path);
+                  if (!value || backend.getErrorMessage?.(value)) {
+                    return false;
+                  }
 
-                  return !typeFieldsMap[value]?.has(key);
+                  if (!value.__typename) {
+                    throw new Error("missing __typename");
+                  }
+
+                  if (!typeFieldsMap[value.__typename]) {
+                    throw new Error(`unexpected typename: expected one of ${JSON.stringify(Object.keys(typeFieldsMap))} but got ${JSON.stringify(value.__typename)}`);
+                  }
+
+                  return !typeFieldsMap[value.__typename]?.has(key);
                 }
 
 
