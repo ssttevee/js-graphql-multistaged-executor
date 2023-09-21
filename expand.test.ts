@@ -43,6 +43,15 @@ test("simple expand", () => {
       [],
     ),
   ).toEqual([{ path: arrayToPath("asdf", 0), value: "baz" }]);
+  expect(
+    expandFromObject(
+      { foo: { bar: "baz" } },
+      ["foo", "bar"],
+      arrayToPath("hello", "world"),
+      undefined,
+      [],
+    ),
+  ).toEqual([{ path: arrayToPath("hello", "world"), value: "baz" }]);
 });
 
 test("1d expand", () => {

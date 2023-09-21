@@ -46,27 +46,6 @@ function concatPath(a: Path | undefined, b: Path | undefined): Path | undefined 
   return a;
 }
 
-function isContained(a: Array<string | number>, b: Array<string | number>): boolean {
-outer:
-  for (let i = 0; i < b.length; i++) {
-    if (a[a.length - 1] !== b[b.length - i - 1]) {
-      continue;
-    }
-
-    if (a.length > 1) {
-      for (let j = 0; j < a.length - 1; j++) {
-        if (a[a.length - j - 2] !== b[b.length - i - j - 2]) {
-          continue outer;
-        }
-      }
-    }
-
-    return true;
-  }
-
-  return false;
-}
-
 function fixErrorPath(errPath: Array<string | number>, pathArray: Array<string | number>, deferredPath: Array<string | number>) {
   if (typeof errPath[0] === 'number') {
     errPath.shift();
@@ -107,14 +86,23 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
 
   const pathArray = pathToArray(path);
   // pathArray must have the same number of array index placeholders (`[]`) as deferredPath
-  if (deferredPath.filter((p) => p === '[]').length !== pathArray.filter((p) => p === '[]').length) {
+  const arrayIndexPlaceholderCount = deferredPath.filter((p) => p === '[]').length;
+  if (arrayIndexPlaceholderCount !== pathArray.filter((p) => p === '[]').length) {
     throw new Error(`expandFromObject: arraysFromPath !== arraysFromDeferred: ${JSON.stringify(pathArray)} ${JSON.stringify(deferredPath)}`);
   }
 
-  // suffix of pathArray, starting with the first array index placeholder if any, must be contained within deferredPath
-  const firstArrayIndexPlaceholderPos = pathArray.indexOf('[]');
-  if (!isContained(firstArrayIndexPlaceholderPos === -1 ? [pathArray[pathArray.length - 1]] : pathArray.slice(firstArrayIndexPlaceholderPos), deferredPath)) {
-    throw new Error(`expandFromObject: suffix of pathArray is not contained within deferredPath: ${JSON.stringify(pathArray)} ${JSON.stringify(deferredPath)}`)
+  if (arrayIndexPlaceholderCount > 1) {
+    // everything between the first and last array index placeholder must be identical
+    const firstDeferredPathIndexPlaceholderPos = deferredPath.indexOf('[]');
+    const lastDeferredPathIndexPlaceholderPos = deferredPath.lastIndexOf('[]');
+    const firstPathArrayIndexPlaceholderPos = pathArray.indexOf('[]');
+    const lastPathArrayIndexPlaceholderPos = pathArray.lastIndexOf('[]');
+
+    const deferredPathMiddle = deferredPath.slice(firstDeferredPathIndexPlaceholderPos + 1, lastDeferredPathIndexPlaceholderPos);
+    const pathArrayMiddle = pathArray.slice(firstPathArrayIndexPlaceholderPos + 1, lastPathArrayIndexPlaceholderPos);
+    if (deferredPathMiddle.length !== pathArrayMiddle.length || deferredPathMiddle.some((p, i) => p !== pathArrayMiddle[i])) {
+      throw new Error(`expandFromObject: pathArrayMiddle !== deferredPathMiddle: ${JSON.stringify(pathArray)} ${JSON.stringify(deferredPath)}`);
+    }
   }
 
   let pathSuffix = reversePath(path);
@@ -161,6 +149,11 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
     throw new GraphQLError(err.message, {
       path: fixErrorPath(Array.from(err.path!), pathArray, deferredPath),
     });
+  }
+
+  if (!pathPrefix && pathSuffix && pathSuffix.key !== '[]') {
+    // no path overlap, return the original path
+    return [{ path: path!, value: obj }];
   }
 
   if (!pathSuffix) {
