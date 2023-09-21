@@ -73,7 +73,7 @@ export interface ExecutorBackend<TDeferred> {
   getErrorMessage?: (value: unknown) => string | null;
 }
 
-type SerializeFunction = (value: any) => unknown;
+type SerializeFunction = (value: any, contextValue: any) => unknown;
 
 const identity: SerializeFunction = (v) => v;
 
@@ -849,7 +849,7 @@ export function createExecuteFn<TDeferred>(
         }
 
         try {
-          parent[0][parent[1]] = await serialize(await value);
+          parent[0][parent[1]] = await serialize(await value, contextValue);
         } catch (e) {
           resultErrors.push(new GraphQLError((e as any)?.message ?? String(e), {
             nodes: (e as any).nodes ?? fieldNode,
