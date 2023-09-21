@@ -1,6 +1,6 @@
 import { GraphQLError } from "graphql";
 import { Path, addPath, pathToArray } from "graphql/jsutils/Path";
-import { selectFromObject } from "./utils";
+import { isNullValue, selectFromObject } from "./utils";
 
 
 export interface ShouldExcludeResultPredicate {
@@ -67,6 +67,31 @@ outer:
   return false;
 }
 
+function fixErrorPath(errPath: Array<string | number>, pathArray: Array<string | number>, deferredPath: Array<string | number>) {
+  if (typeof errPath[0] === 'number') {
+    errPath.shift();
+  }
+
+  const fixedDeferredPathLength = (deferredPath.length - (typeof deferredPath[0] === 'number' ? 1 : 0));
+  let realPath: Array<string | number>;
+  if (!errPath.length) {
+    realPath = pathArray.slice(0, -fixedDeferredPathLength);
+  } else {
+    let pos = -1;
+    do {
+      pos = pathArray.indexOf(errPath[0], pos + 1);
+      if (pos === -1) {
+        // give up
+        realPath = pathArray;
+        break;
+      }
+    } while (pathArray.slice(pos, pos + errPath.length).some((v, i) => v !== errPath[i]));
+    realPath = pathArray.slice(0, pos + errPath.length);
+  }
+
+  return realPath;
+}
+
 export function expandFromObject(obj: any, deferredPath: Array<string | number>, path: Path | undefined, shouldExcludeResult: ShouldExcludeResultPredicate | undefined, resultErrors: readonly GraphQLError[], getErrorMessage?: (value: any) => string | null): Array<{ path: Path; value: any }> {
   if (shouldExcludeResult?.(deferredPath, obj)) {
     return [];
@@ -76,49 +101,14 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
     return [];
   }
 
-  const pathArray = pathToArray(path);
-  // pathArray must have the same number of array index placeholders (`[]`) as deferredPath
-  const arrayCountFromDeferred = deferredPath.filter((p) => p === '[]').length;
-  const arrayCountFromPath = pathArray.filter((p) => p === '[]').length;
-  if (arrayCountFromPath !== arrayCountFromDeferred) {
-    throw new Error(`expandFromObject: arraysFromPath !== arraysFromDeferred: ${JSON.stringify(pathArray)} ${JSON.stringify(deferredPath)}`);
+  if (deferredPath.length === 0) {
+    return [{ path: path!, value: obj }];
   }
 
-  if (!arrayCountFromDeferred) {
-    // base case (no arrays in deferredPath)
-    try {
-      return [{ path: path!, value: selectFromObject(obj, deferredPath, getErrorMessage) }];
-    } catch (err) {
-      if (err instanceof GraphQLError) {
-        const errPath = Array.from(err.path!);
-        if (typeof errPath[0] === 'number') {
-          errPath.shift();
-        }
-
-        const fixedDeferredPathLength = (deferredPath.length - (typeof deferredPath[0] === 'number' ? 1 : 0));
-        let realPath: Array<string | number>;
-        if (!errPath.length) {
-          realPath = pathArray.slice(0, -fixedDeferredPathLength);
-        } else {
-          let pos = -1;
-          do {
-            pos = pathArray.indexOf(errPath[0], pos + 1);
-            if (pos === -1) {
-              // give up
-              realPath = pathArray;
-              break;
-            }
-          } while (pathArray.slice(pos, pos + errPath.length).some((v, i) => v !== errPath[i]));
-          realPath = pathArray.slice(0, pos + errPath.length);
-        }
-
-        throw new GraphQLError(err.message, {
-          path: realPath,
-        });
-      }
-
-      throw err;
-    }
+  const pathArray = pathToArray(path);
+  // pathArray must have the same number of array index placeholders (`[]`) as deferredPath
+  if (deferredPath.filter((p) => p === '[]').length !== pathArray.filter((p) => p === '[]').length) {
+    throw new Error(`expandFromObject: arraysFromPath !== arraysFromDeferred: ${JSON.stringify(pathArray)} ${JSON.stringify(deferredPath)}`);
   }
 
   // suffix of pathArray, starting with the first array index placeholder if any, must be contained within deferredPath
@@ -127,52 +117,89 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
     throw new Error(`expandFromObject: suffix of pathArray is not contained within deferredPath: ${JSON.stringify(pathArray)} ${JSON.stringify(deferredPath)}`)
   }
 
+  let pathSuffix = reversePath(path);
+  let pathPrefix: Path | undefined = undefined;
+  try {
+    let pathPos = 0;
+    for (const [i, key] of deferredPath.entries()) {
+      if (isNullValue(obj)) {
+        return [{ path: pathPrefix!, value: obj }];
+      }
+
+      if (key === '[]') {
+        break;
+      }
+
+      const errorMessage = getErrorMessage?.(obj);
+      if (errorMessage) {
+        throw new GraphQLError(errorMessage, {
+          path: deferredPath.slice(0, i),
+        });
+      }
+
+      obj = obj[key];
+      if (!pathPrefix) {
+        const pos = pathArray.indexOf(key);
+        if (pos !== -1) {
+          pathPos = pos + 1;
+          for (let j = 0; j < pathPos; j++) {
+            pathPrefix = addPath(pathPrefix, pathSuffix!.key, pathSuffix!.typename);
+            pathSuffix = pathSuffix!.prev;
+          }
+        }
+      } else if (pathSuffix) {
+        pathPrefix = addPath(pathPrefix, pathSuffix.key, pathSuffix.typename);
+        pathSuffix = pathSuffix!.prev;
+        pathPos += 1;
+      }
+    }
+  } catch (err) {
+    if (!(err instanceof GraphQLError)) {
+      throw err;
+    }
+
+    throw new GraphQLError(err.message, {
+      path: fixErrorPath(Array.from(err.path!), pathArray, deferredPath),
+    });
+  }
+
+  if (!pathSuffix) {
+    if (!pathPrefix) {
+      throw new Error('expandFromObject: pathPrefix is undefined');
+    }
+
+    return [{ path: pathPrefix, value: obj }];
+  }
+
   // get the first array value
   const indexPlaceholderPos = deferredPath.indexOf('[]');
-  const arrayPath = deferredPath.slice(0, indexPlaceholderPos);
-  const arrayValue = selectFromObject(obj, arrayPath);
-  if (!Array.isArray(arrayValue)) {
+  const arrayPath = pathToArray(pathPrefix);
+  if (!Array.isArray(obj)) {
     throw new GraphQLError(
-        `Expected array but got ${JSON.stringify(arrayValue)}`,
+        `Expected array but got ${JSON.stringify(obj)}`,
         {
             path: arrayPath,
         },
     );
   }
 
-  // splice the path at the first array index placeholder, so it can be rebuild with a real index for each array element
-  let pathPrefix = path;
-  let pathSuffix: Path | undefined;
-
-  for (let i = 0; i < pathArray.length - indexPlaceholderPos - 1; i++) {
+  if (!obj.length) {
     if (!pathPrefix) {
-      throw new Error('expandFromObject: path is too short');
+      throw new Error('expandFromObject: pathPrefix is undefined');
     }
 
-    pathSuffix = addPath(pathSuffix, pathPrefix.key, pathPrefix.typename);
-    pathPrefix = pathPrefix.prev;
+    return [
+      {
+        path: pathPrefix,
+        value: obj,
+      }
+    ];
   }
 
-  // remove the array index placeholder to make space for the real index
-
-  if (!pathPrefix) {
-    throw new Error('expandFromObject: path is too short');
-  }
-
-  pathPrefix = pathPrefix.prev;
-  if (!arrayValue.length) {
-      return [
-          {
-              path: pathPrefix!,
-              value: arrayValue,
-          }
-      ];
-  }
-
-  pathSuffix = reversePath(pathSuffix);
+  pathSuffix = reversePath(pathSuffix.prev);
 
   // recurse for each array element
-  return arrayValue.flatMap((elem, index) => {
+  return obj.flatMap((elem, index) => {
     // curry the shouldExcludeResult predicate to include the omitted path prefix
     let shouldExcludeResultFn = shouldExcludeResult;
     if (shouldExcludeResultFn) {

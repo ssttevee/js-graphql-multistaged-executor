@@ -151,3 +151,56 @@ test("2d expand", () => {
     { path: arrayToPath("hello", 1, 0), value: "jim" },
   ]);
 });
+
+test("empty array in path", () => {
+  expect(
+    expandFromObject(
+      { foo: [] },
+      ["foo", "[]", "bar"],
+      arrayToPath("foo", "[]", "bar"),
+      undefined,
+      []
+    )
+  ).toEqual([
+    { path: arrayToPath("foo"), value: [] },
+  ]);
+});
+
+test("null in path", () => {
+  expect(
+    expandFromObject(
+      [{ foo: null }],
+      [0, "foo", "bar"],
+      arrayToPath("asdf", "foo", "bar"),
+      undefined,
+      []
+    )
+  ).toEqual([
+    { path: arrayToPath("asdf", "foo"), value: null },
+  ]);
+
+  expect(
+    expandFromObject(
+      { foo: null },
+      ["foo", "[]", "bar"],
+      arrayToPath("foo", "[]", "bar"),
+      undefined,
+      []
+    )
+  ).toEqual([
+    { path: arrayToPath("foo"), value: null },
+  ]);
+
+  expect(
+    expandFromObject(
+      { foo: [{ bar: null }, { bar: { baz: "asdf" } }] },
+      ["foo", "[]", "bar", "baz"],
+      arrayToPath("foo", "[]", "bar", "baz"),
+      undefined,
+      []
+    )
+  ).toEqual([
+    { path: arrayToPath("foo", 0, "bar"), value: null },
+    { path: arrayToPath("foo", 1, "bar", "baz"), value: "asdf" },
+  ]);
+});

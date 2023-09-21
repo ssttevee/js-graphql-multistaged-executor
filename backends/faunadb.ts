@@ -1,4 +1,4 @@
-import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, Merge, errors, ContainsField, IsArray, IsObject, And } from "faunadb";
+import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, Merge, errors, ContainsField, IsArray, IsObject, And, IsNull } from "faunadb";
 import {
   FieldNode,
   GraphQLError,
@@ -40,6 +40,21 @@ async function unwrapResolvedValue(expr: any) {
   }
 
   return expr;
+}
+
+function wrapChildObject(varName: string, dataContainer: any) {
+  return If(
+    IsNull(Var(varName)),
+    null,
+    If(
+      And(
+        IsObject(Var(varName)),
+        ContainsField("@error", Var(varName)),
+      ),
+      Var(varName),
+      dataContainer,
+    ),
+  );
 }
 
 export default function createExecutorBackend(
@@ -166,28 +181,14 @@ export default function createExecutorBackend(
             value,
             Lambda(
               varName,
-              If(
-                And(
-                  IsObject(Var(varName)),
-                  ContainsField("@error", Var(varName)),
-                ),
-                Var(varName),
-                dataContainer,
-              ),
+              wrapChildObject(varName, dataContainer),
             ),
           );
       } else {
         getDeferred = () =>
           Let(
             { [varName]: value },
-            If(
-              And(
-                IsObject(Var(varName)),
-                ContainsField("@error", Var(varName)),
-              ),
-              Var(varName),
-              dataContainer,
-            ),
+            wrapChildObject(varName, dataContainer),
           );
       }
 

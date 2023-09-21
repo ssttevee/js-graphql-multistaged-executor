@@ -30,7 +30,7 @@ import { FragmentDefinitionMap, selectionFields } from "./selection";
 import { resolveArguments } from "./arguments";
 import { getFieldDef } from "graphql/execution/execute";
 import { expandFromObject, ShouldExcludeResultPredicate } from "./expand";
-import { partition, selectFromObject } from "./utils";
+import { isNullValue, partition, selectFromObject } from "./utils";
 
 export type WrappedValue<T> = PromiseLike<T> & (
   T extends Array<infer E> ? Array<WrappedValue<E>> :
@@ -76,10 +76,6 @@ export interface ExecutorBackend<TDeferred> {
 type SerializeFunction = (value: any) => unknown;
 
 const identity: SerializeFunction = (v) => v;
-
-function isNullValue(value: unknown): boolean {
-  return value === null || value === undefined;
-}
 
 interface ResolveContext<TRoot = any> {
   schema: GraphQLSchema;
@@ -711,8 +707,8 @@ export function createExecuteFn<TDeferred>(
             const { fieldNode, fieldNodes, parentType, prevPath, deferredPath, shouldExcludeResult } = step4_restage.shift()!;
             try {
               const [finishedValues, nextValues] = partition(
-                expandFromObject(deferredValues, deferredPath, prevPath, shouldExcludeResult, resultErrors, backend.getErrorMessage),
-                ({ path }) => !equivalentPathKey(path?.key, prevPath?.key),
+                expandFromObject(deferredValues, deferredPath, addPath(prevPath, fieldNodeKey(fieldNode), undefined), shouldExcludeResult, resultErrors, backend.getErrorMessage),
+                ({ path }) => !equivalentPathKey(path?.prev?.key, prevPath?.key),
               );
               completedFields.push(
                 ...finishedValues.map(({ path, value }) => {
@@ -739,7 +735,7 @@ export function createExecuteFn<TDeferred>(
 
                       return parentType.parent;
                     }, parentType),
-                    prevPath: path,
+                    prevPath: path.prev,
                     sourceValue: value,
                   }];
                 }),

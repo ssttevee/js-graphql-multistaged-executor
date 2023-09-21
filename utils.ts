@@ -56,3 +56,7 @@ export function partition(arr: Array<any>, predicate: (item: any) => boolean): [
 
   return [a, b];
 }
+
+export function isNullValue(value: unknown): value is null | undefined {
+  return value === null || value === undefined;
+}
