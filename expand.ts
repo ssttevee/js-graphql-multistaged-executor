@@ -114,10 +114,6 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
         return [{ path: pathPrefix!, value: obj }];
       }
 
-      if (key === '[]') {
-        break;
-      }
-
       const errorMessage = getErrorMessage?.(obj);
       if (errorMessage) {
         throw new GraphQLError(errorMessage, {
@@ -125,7 +121,6 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
         });
       }
 
-      obj = obj[key];
       if (!pathPrefix) {
         const pos = pathArray.indexOf(key);
         if (pos !== -1) {
@@ -140,6 +135,12 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
         pathSuffix = pathSuffix!.prev;
         pathPos += 1;
       }
+
+      if (key === '[]') {
+        break;
+      }
+
+      obj = obj[key];
     }
   } catch (err) {
     if (!(err instanceof GraphQLError)) {
@@ -151,18 +152,20 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
     });
   }
 
-  if (!pathPrefix && pathSuffix && pathSuffix.key !== '[]') {
+  if (!pathPrefix && pathSuffix) {
     // no path overlap, return the original path
     return [{ path: path!, value: obj }];
   }
 
-  if (!pathSuffix) {
+  if (pathPrefix?.key !== '[]') {
     if (!pathPrefix) {
       throw new Error('expandFromObject: pathPrefix is undefined');
     }
 
     return [{ path: pathPrefix, value: obj }];
   }
+
+  pathPrefix = pathPrefix.prev;
 
   // get the first array value
   const indexPlaceholderPos = deferredPath.indexOf('[]');
@@ -189,7 +192,7 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
     ];
   }
 
-  pathSuffix = reversePath(pathSuffix.prev);
+  pathSuffix = reversePath(pathSuffix);
 
   // recurse for each array element
   return obj.flatMap((elem, index) => {
