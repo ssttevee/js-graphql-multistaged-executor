@@ -91,15 +91,12 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
     throw new Error(`expandFromObject: arraysFromPath !== arraysFromDeferred: ${JSON.stringify(pathArray)} ${JSON.stringify(deferredPath)}`);
   }
 
+  const firstDeferredPathIndexPlaceholderPos = deferredPath.indexOf('[]');
+  const firstPathArrayIndexPlaceholderPos = pathArray.indexOf('[]');
   if (arrayIndexPlaceholderCount > 1) {
-    // everything between the first and last array index placeholder must be identical
-    const firstDeferredPathIndexPlaceholderPos = deferredPath.indexOf('[]');
-    const lastDeferredPathIndexPlaceholderPos = deferredPath.lastIndexOf('[]');
-    const firstPathArrayIndexPlaceholderPos = pathArray.indexOf('[]');
-    const lastPathArrayIndexPlaceholderPos = pathArray.lastIndexOf('[]');
-
-    const deferredPathMiddle = deferredPath.slice(firstDeferredPathIndexPlaceholderPos + 1, lastDeferredPathIndexPlaceholderPos);
-    const pathArrayMiddle = pathArray.slice(firstPathArrayIndexPlaceholderPos + 1, lastPathArrayIndexPlaceholderPos);
+    // everything from the first array index placeholder must be identical
+    const deferredPathMiddle = deferredPath.slice(firstDeferredPathIndexPlaceholderPos + 1);
+    const pathArrayMiddle = pathArray.slice(firstPathArrayIndexPlaceholderPos + 1);
     if (deferredPathMiddle.length !== pathArrayMiddle.length || deferredPathMiddle.some((p, i) => p !== pathArrayMiddle[i])) {
       throw new Error(`expandFromObject: pathArrayMiddle !== deferredPathMiddle: ${JSON.stringify(pathArray)} ${JSON.stringify(deferredPath)}`);
     }
@@ -107,9 +104,33 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
 
   let pathSuffix = reversePath(path);
   let pathPrefix: Path | undefined = undefined;
+
   try {
-    let pathPos = 0;
-    for (const [i, key] of deferredPath.entries()) {
+    const preArrayDeferredPath = deferredPath.slice(0, firstDeferredPathIndexPlaceholderPos < 0 ? undefined : firstDeferredPathIndexPlaceholderPos);
+    const preArrayPathArray = pathArray.slice(0, firstPathArrayIndexPlaceholderPos < 0 ? undefined : firstPathArrayIndexPlaceholderPos);
+
+    // find matching suffix between preArrayPathArray and preArrayDeferredPath (could be none)
+    let suffixLength = 0;
+    for (let i = 0; i < Math.min(preArrayPathArray.length, preArrayDeferredPath.length); i++) {
+      if (preArrayPathArray[preArrayPathArray.length - i - 1] !== preArrayDeferredPath[preArrayDeferredPath.length - i - 1]) {
+        break;
+      }
+
+      suffixLength += 1;
+    }
+
+    for (let i = 0; i < preArrayPathArray.length - suffixLength; i++) {
+      pathPrefix = addPath(pathPrefix, pathSuffix!.key, pathSuffix!.typename);
+      pathSuffix = pathSuffix!.prev;
+    }
+
+    // shortcut for non-matching prefix
+    obj = selectFromObject(obj, preArrayDeferredPath.slice(0, preArrayDeferredPath.length - suffixLength), getErrorMessage);
+    if (isNullValue(obj)) {
+      return [{ path: pathPrefix!, value: obj }];
+    }
+
+    for (const [i, key] of preArrayDeferredPath.slice(preArrayDeferredPath.length - suffixLength).entries()) {
       if (isNullValue(obj)) {
         return [{ path: pathPrefix!, value: obj }];
       }
@@ -121,24 +142,8 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
         });
       }
 
-      if (!pathPrefix) {
-        const pos = pathArray.indexOf(key);
-        if (pos !== -1) {
-          pathPos = pos + 1;
-          for (let j = 0; j < pathPos; j++) {
-            pathPrefix = addPath(pathPrefix, pathSuffix!.key, pathSuffix!.typename);
-            pathSuffix = pathSuffix!.prev;
-          }
-        }
-      } else if (pathSuffix) {
-        pathPrefix = addPath(pathPrefix, pathSuffix.key, pathSuffix.typename);
-        pathSuffix = pathSuffix!.prev;
-        pathPos += 1;
-      }
-
-      if (key === '[]') {
-        break;
-      }
+      pathPrefix = addPath(pathPrefix, pathSuffix!.key, pathSuffix!.typename);
+      pathSuffix = pathSuffix!.prev;
 
       obj = obj[key];
     }
@@ -152,12 +157,11 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
     });
   }
 
-  if (!pathPrefix && pathSuffix) {
-    // no path overlap, return the original path
-    return [{ path: path!, value: obj }];
+  if (isNullValue(obj)) {
+    return [{ path: pathPrefix!, value: obj }];
   }
 
-  if (pathPrefix?.key !== '[]') {
+  if (pathSuffix?.key !== '[]') {
     if (!pathPrefix) {
       throw new Error('expandFromObject: pathPrefix is undefined');
     }
@@ -165,7 +169,7 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
     return [{ path: pathPrefix, value: obj }];
   }
 
-  pathPrefix = pathPrefix.prev;
+  pathSuffix = pathSuffix.prev;
 
   // get the first array value
   const indexPlaceholderPos = deferredPath.indexOf('[]');
