@@ -1,5 +1,6 @@
-import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, Merge, errors, ContainsField, IsArray, IsObject, And, IsNull } from "faunadb";
+import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, Merge, errors, ContainsField, IsArray, IsObject, And, IsNull, ExprArg } from "faunadb";
 import {
+  ExecutionArgs,
   FieldNode,
   GraphQLError,
   GraphQLInterfaceType,
@@ -11,7 +12,7 @@ import {
 import { addPath, Path, pathToArray } from "graphql/jsutils/Path";
 
 import type { ExecutorBackend, WrappedValue } from "../executor";
-import { findImplementors } from "../utils";
+import { Middleware, findImplementors, flattenMiddleware } from "../utils";
 
 function isExpr(e: any) {
   return e && (
@@ -22,19 +23,19 @@ function isExpr(e: any) {
 
 const wrapped = Symbol("is wrapped");
 const original = Symbol("get original");
-const isWrappedValue = (value: any): value is WrappedValue<any> => Boolean(value?.[wrapped]);
+export const isWrappedValue = (value: any): value is WrappedValue<any> => Boolean(value?.[wrapped]);
 
-async function unwrapResolvedValue(expr: any) {
+export async function unwrapValue(expr: any) {
   expr = (expr as any)?.[wrapped] ? (expr as any)[original] : expr;
 
   if (isExpr(expr)) {
-    expr.raw = await unwrapResolvedValue(expr.raw);
+    expr.raw = await unwrapValue(expr.raw);
   } else if (Array.isArray(expr)) {
-    for (let [i, result] of (await Promise.all(expr.map(unwrapResolvedValue))).entries()) {
+    for (let [i, result] of (await Promise.all(expr.map(unwrapValue))).entries()) {
       expr[i] = result;
     }
   } else if (expr instanceof Object) {
-    for (let [k, v] of (await Promise.all(Object.entries(expr).map(async ([k, v]) => [k, await unwrapResolvedValue(v)])))) {
+    for (let [k, v] of (await Promise.all(Object.entries(expr).map(async ([k, v]) => [k, await unwrapValue(v)])))) {
       expr[k] = v;
     }
   }
@@ -57,10 +58,26 @@ function wrapChildObject(varName: string, dataContainer: any) {
   );
 }
 
+export type QueryFunction = (client: Client, query: ExprArg, executionArgs: ExecutionArgs) => any;
+
+export type QueryMiddleware = Middleware<QueryFunction>;
+
+export interface CreateExecutorBackendOptions {
+  queryMiddleware?: QueryMiddleware | QueryMiddleware[];
+}
+
+const realQuerySymbol = Symbol("real query");
+
 export default function createExecutorBackend(
-  opts?: ClientConfig | Client,
+  input?: ClientConfig | Client,
+  options: CreateExecutorBackendOptions = {},
 ): ExecutorBackend<Expr> {
-  const client = opts instanceof Client ? opts : new Client(opts);
+  const client = input instanceof Client ? input : new Client(input);
+
+  const runQuery = flattenMiddleware(options.queryMiddleware)((c, q, e) => {
+    (e.contextValue as any)[realQuerySymbol] = q;
+    return c.query(q);
+  });
 
   const wrapSourceValue = (
     sourceValue: unknown,
@@ -106,19 +123,19 @@ export default function createExecutorBackend(
   };
 
   return {
-    resolveDeferredValues: async (input, observer) => {
+    resolveDeferredValues: async (input, executionArgs) => {
       const query = Array.from(input, ([expr]) => expr);
       const paths = Array.from(input, ([, path]) => pathToArray(path));
       try {
-        return await client.query(query, { observer });
+        return await runQuery(client, query, executionArgs);
       } catch (e) {
         if (!(e instanceof errors.FaunaHTTPError)) {
           throw e;
         }
 
-        const rawQuery = JSON.parse(JSON.stringify(query));
+        const rawQuery = JSON.parse(JSON.stringify((executionArgs.contextValue as any)[realQuerySymbol]));
         throw Array.from(e.requestResult.responseContent.errors, (responseErr) => {
-          const pathPrefix = paths[responseErr.position[0] as number];
+          const pathPrefix = paths[responseErr.position.find((pos) => typeof pos === "number") as number];
 
           const objectPath: Array<string | number> = [];
 
@@ -151,6 +168,8 @@ export default function createExecutorBackend(
             ],
           });
         });
+      } finally {
+        delete (executionArgs.contextValue as any)[realQuerySymbol]
       }
     },
     isDeferredValue: (value: unknown): value is Expr => {
@@ -158,7 +177,7 @@ export default function createExecutorBackend(
     },
     wrapSourceValue,
     isWrappedValue,
-    unwrapResolvedValue,
+    unwrapResolvedValue: unwrapValue,
     expandChildren: (
       path: Path,
       returnType: GraphQLOutputType,

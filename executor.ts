@@ -9,13 +9,16 @@ import {
   GraphQLAbstractType,
   GraphQLEnumType,
   GraphQLError,
+  GraphQLField,
   GraphQLFieldResolver,
   GraphQLInterfaceType,
+  GraphQLLeafType,
   GraphQLObjectType,
   GraphQLOutputType,
   GraphQLResolveInfo,
   GraphQLScalarType,
   GraphQLSchema,
+  GraphQLTypeResolver,
   GraphQLUnionType,
   isAbstractType,
   isListType,
@@ -30,7 +33,7 @@ import { FragmentDefinitionMap, selectionFields } from "./selection";
 import { resolveArguments } from "./arguments";
 import { getFieldDef } from "graphql/execution/execute";
 import { expandFromObject, ShouldExcludeResultPredicate } from "./expand";
-import { isNullValue, partition, selectFromObject } from "./utils";
+import { flattenMiddleware, isNullValue, Middleware, partition, selectFromObject } from "./utils";
 
 export type WrappedValue<T> = PromiseLike<T> & (
   T extends Array<infer E> ? Array<WrappedValue<E>> :
@@ -60,7 +63,7 @@ export interface ExecutorBackend<TDeferred> {
     getValue: () => Promise<unknown>,
   ): WrappedValue<any>;
   isDeferredValue(value: unknown): value is TDeferred;
-  resolveDeferredValues(values: Array<[TDeferred, Path]>, observer?: (metrics: any) => void): Promise<unknown[]>;
+  resolveDeferredValues(values: Array<[TDeferred, Path]>, executionArgs: ExecutionArgs): Promise<unknown[]>;
   expandChildren(
     path: Path,
     returnType: GraphQLOutputType,
@@ -239,32 +242,76 @@ function getRootType(schema: GraphQLSchema, operation: OperationDefinitionNode):
   return schema.getQueryType();
 }
 
-function didParentError(path: Array<string | number>, errors: readonly GraphQLError[]) {
-  return errors.some((error) => {
-    const errorPath = error.path;
-    if (!errorPath) {
-      return false;
-    }
+export type FieldResolverGetter<TSource, TContext> = {
+  (fieldDefinition: GraphQLField<TSource, TContext, any>, executionArgs: ExecutionArgs, defaultFieldResolver: GraphQLFieldResolver<TSource, TContext>): GraphQLFieldResolver<TSource, TContext>;
+};
 
-    if (path.length < errorPath.length) {
-      return false;
-    }
+function defaultFieldResolverGetter(fieldDef: GraphQLField<unknown, unknown, any>, args: ExecutionArgs, defaultFieldResolver: GraphQLFieldResolver<unknown, unknown>) {
+  return fieldDef.resolve ?? args.fieldResolver ?? defaultFieldResolver;
+}
 
-    return Array.prototype.every.call(errorPath, (key, i) => key === path[i]);
-  });
+export type TypeResolverGetter<TSource, TContext> = {
+  (fieldDefinition: GraphQLAbstractType, executionArgs: ExecutionArgs, defaultTypeResolver: GraphQLTypeResolver<TSource, TContext>): GraphQLTypeResolver<TSource, TContext>;
+};
+
+function defaultTypeResolverGetter(fieldType: GraphQLAbstractType, args: ExecutionArgs, defaultTypeResolver: GraphQLTypeResolver<unknown, unknown>) {
+  return fieldType.resolveType ?? args.typeResolver ?? defaultTypeResolver;
+}
+
+export type SerializerGetter<TSource, TContext> = {
+  (fieldValue: unknown, fieldType: GraphQLLeafType, parentType: GraphQLObjectType<TSource, TContext>, path: Path, executionArgs: ExecutionArgs): SerializeFunction | undefined | null;
+};
+
+function defaultSerializerGetter(_: unknown, fieldType: GraphQLLeafType) {
+  return fieldType.serialize?.bind(fieldType);
+}
+
+export type FieldResolverGetterMiddleware<TSource, TContext> = Middleware<FieldResolverGetter<TSource, TContext>>;
+
+export type FieldResolverMiddleware<TSource, TContext, TArgs = any, TResult = unknown> = Middleware<GraphQLFieldResolver<TSource, TContext, TArgs, TResult>>;
+
+export type TypeResolverGetterMiddleware<TSource, TContext> = Middleware<TypeResolverGetter<TSource, TContext>>;
+
+export type TypeResolverMiddleware<TSource, TContext> = Middleware<GraphQLTypeResolver<TSource, TContext>>;
+
+export type SerializerGetterMiddleware<TSource, TContext> = Middleware<SerializerGetter<TSource, TContext>>;
+
+type MaybeArray<T> = T | T[];
+
+interface Middlewares<TSource, TContext> {
+  fieldResolverMiddleware?: MaybeArray<FieldResolverMiddleware<TSource, TContext>>;
+  fieldResolverGetterMiddleware?: MaybeArray<FieldResolverGetterMiddleware<TSource, TContext>>;
+  typeResolverMiddleware?: MaybeArray<TypeResolverMiddleware<TSource, TContext>>;
+  typeResolverGetterMiddleware?: MaybeArray<TypeResolverGetterMiddleware<TSource, TContext>>;
+  serializerGetterMiddleware?: MaybeArray<SerializerGetterMiddleware<TSource, TContext>>;
+}
+
+export interface CreateExecuteFnOptions<TSource, TContext> extends Middlewares<TSource, TContext> {
 }
 
 export function createExecuteFn<TDeferred>(
   backend: ExecutorBackend<TDeferred>,
+  options: CreateExecuteFnOptions<unknown, unknown> = {},
 ): <T = any>(args: ExecutionArgs) => Promise<ExecutionResult<T>> {
-  return async function execute<T = any>(
-    {
+  const rootFieldResolverMiddleware = flattenMiddleware(options.fieldResolverMiddleware);
+  const rootFieldResolverGetterMiddleware = flattenMiddleware(options.fieldResolverGetterMiddleware);
+  const rootTypeResolverMiddleware = flattenMiddleware(options.typeResolverMiddleware);
+  const rootTypeResolverGetterMiddleware = flattenMiddleware(options.typeResolverGetterMiddleware);
+  const rootSerializerGetterMiddleware = flattenMiddleware(options.serializerGetterMiddleware);
+
+  return async function execute<T = any>(args: ExecutionArgs & Middlewares<unknown, unknown>): Promise<ExecutionResult<T>> {
+    const {
       schema,
       rootValue,
       contextValue,
-      ...args
-    }: ExecutionArgs,
-  ): Promise<ExecutionResult<T>> {
+    } = args;
+
+    const fieldResolverMiddleware = flattenMiddleware([flattenMiddleware(args.fieldResolverMiddleware), rootFieldResolverMiddleware]);
+    const getFieldResolver = flattenMiddleware([flattenMiddleware(args.fieldResolverGetterMiddleware), rootFieldResolverGetterMiddleware])(defaultFieldResolverGetter);
+    const typeResolverMiddleware = flattenMiddleware([flattenMiddleware(args.typeResolverMiddleware), rootTypeResolverMiddleware]);
+    const getTypeResolver = flattenMiddleware([flattenMiddleware(args.typeResolverGetterMiddleware), rootTypeResolverGetterMiddleware])(defaultTypeResolverGetter);
+    const getSerializer = flattenMiddleware([flattenMiddleware(args.serializerGetterMiddleware), rootSerializerGetterMiddleware])(defaultSerializerGetter);
+
     /**
      * GOALS:
      *
@@ -316,7 +363,7 @@ export function createExecuteFn<TDeferred>(
             const path = addPath(prevPath, fieldKey, parentType.type.name);
             try {
               const fieldDef = getFieldDef(schema, parentType.type, fieldNode)!;
-              const resolveField = overrideFieldResolver ?? fieldDef.resolve ?? args.fieldResolver ?? defaultFieldResolver;
+              const resolveField = overrideFieldResolver ?? getFieldResolver(fieldDef, args, defaultFieldResolver);
 
               let sourceValue = await originalSourceValue;
               if (backend.isDeferredValue(sourceValue)) {
@@ -328,7 +375,7 @@ export function createExecuteFn<TDeferred>(
               }
 
               try {
-                let fieldValue = resolveField(
+                let fieldValue = fieldResolverMiddleware(resolveField)(
                   sourceValue,
                   resolveArguments(
                     ctx.variableValues,
@@ -629,14 +676,14 @@ export function createExecuteFn<TDeferred>(
 
               if (fieldType instanceof GraphQLScalarType || fieldType instanceof GraphQLEnumType) {
                 // console.log('step3_validate: send to completedFields (3)', pathToArray(path), fieldValue);
-                completedFields.push({ path, value: fieldValue, fieldNode, serialize: fieldType.serialize.bind(fieldType) ?? identity });
+                completedFields.push({ path, value: fieldValue, fieldNode, serialize: getSerializer(fieldValue, fieldType, parentType.type, path, args) ?? identity });
                 continue;
               }
 
               let concreteType: GraphQLObjectType;
               if (fieldType instanceof GraphQLInterfaceType || fieldType instanceof GraphQLUnionType) {
-                const resolveType = fieldType.resolveType ?? args.typeResolver ?? defaultTypeResolver;
-                const typeName = await resolveType(
+                const resolveType = getTypeResolver(fieldType, args, defaultTypeResolver);
+                const typeName = await typeResolverMiddleware(resolveType)(
                   fieldValue,
                   contextValue,
                   buildResolveInfo(
@@ -711,7 +758,7 @@ export function createExecuteFn<TDeferred>(
         }
 
         if (deferredExprs.length) {
-          const deferredValues = await backend.resolveDeferredValues(deferredExprs, (contextValue as any)?.observer);
+          const deferredValues = await backend.resolveDeferredValues(deferredExprs, args);
           // console.log(`resolved ${deferredExprs.length} deferred values`, deferredValues);
 
           while (step4_restage.length) {

@@ -60,3 +60,22 @@ export function partition(arr: Array<any>, predicate: (item: any) => boolean): [
 export function isNullValue(value: unknown): value is null | undefined {
   return value === null || value === undefined;
 }
+
+export type Middleware<F extends (...args: any[]) => any> = {
+  (next: F): F;
+}
+
+export function flattenMiddleware<F extends (this: void, ...args: any[]) => any>(middleware?: Middleware<F> | Middleware<F>[]): Middleware<F> {
+  if (typeof middleware === 'function') {
+    return middleware;
+  }
+
+  if (middleware?.length === 1) {
+    return middleware[0];
+  }
+
+  return Array.from(middleware ?? []).reduceRight(
+    (stack, middleware) => (next) => middleware(stack(next)),
+    (next) => next,
+  );
+}
