@@ -1,12 +1,22 @@
 import typescript from "@rollup/plugin-typescript";
 import dts from "rollup-plugin-dts";
 
+const input = {
+  lib: "executor.ts",
+  helpers: "helpers.ts",
+  'backends/faunadb': "backends/faunadb.ts",
+};
+
+const external = [
+  "faunadb",
+  "graphql",
+  "graphql/jsutils/Path",
+  "graphql/execution/execute",
+];
+
 export default [
   {
-    input: {
-      lib: "executor.ts",
-      'backends/faunadb': "backends/faunadb.ts",
-    },
+    input,
     output: [
       {
         entryFileNames: "[name].mjs",
@@ -21,12 +31,7 @@ export default [
         dir: './',
       },
     ],
-    external: [
-      "faunadb",
-      "graphql",
-      "graphql/jsutils/Path",
-      "graphql/execution/execute",
-    ],
+    external,
     plugins: [
       typescript({
         compilerOptions: {
@@ -44,21 +49,14 @@ export default [
     ],
   },
   {
-    input: {
-      lib: "executor.ts",
-      'backends/faunadb': "backends/faunadb.ts",
-    },
+    input,
     output: [
       {
         entryFileNames: "[name].d.ts",
         dir: './',
       },
     ],
-    external: [
-      "faunadb",
-      "graphql",
-      "graphql/jsutils/Path",
-    ],
+    external,
     plugins: [
       dts(),
     ],

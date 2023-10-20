@@ -34,6 +34,7 @@ import { resolveArguments } from "./arguments";
 import { getFieldDef } from "graphql/execution/execute";
 import { expandFromObject, ShouldExcludeResultPredicate } from "./expand";
 import { flattenMiddleware, isNullValue, Middleware, partition, selectFromObject } from "./utils";
+import { getRootType } from "./helpers";
 
 export type WrappedValue<T> = PromiseLike<T> & (
   T extends Array<infer E> ? Array<WrappedValue<E>> :
@@ -229,18 +230,6 @@ function arrayNewElems<T>(prev: T[], next: T[]): T[] {
 const nextStage = Symbol();
 
 const resolveAbstractTypename = (source: any) => source.__typename;
-
-function getRootType(schema: GraphQLSchema, operation: OperationDefinitionNode): GraphQLObjectType | undefined | null {
-  if (operation.operation === OperationTypeNode.SUBSCRIPTION) {
-    return schema.getSubscriptionType();
-  }
-
-  if (operation.operation === OperationTypeNode.MUTATION) {
-    return schema.getMutationType();
-  }
-
-  return schema.getQueryType();
-}
 
 export type FieldResolverGetter<TSource, TContext> = {
   (fieldDefinition: GraphQLField<TSource, TContext, any>, executionArgs: ExecutionArgs, defaultFieldResolver: GraphQLFieldResolver<TSource, TContext>): GraphQLFieldResolver<TSource, TContext>;
