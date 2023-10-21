@@ -290,13 +290,18 @@ export default function createExecutorBackend(
           );
         }
 
-        return Map(
-          deferredValue,
-          Lambda(
-            varName,
-            expr,
+        return Let(
+          {
+            [varName + "_"]: deferredValue,
+          },
+          wrapChildObject(
+            varName + "_",
+            Map(
+              Var(varName + "_"),
+              Lambda(varName, expr),
+            ),
           ),
-        )
+        );
       };
 
       const sourceValue = Var(varName);
