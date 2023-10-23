@@ -5,6 +5,7 @@ import {
   GraphQLInterfaceType,
   GraphQLObjectType,
   GraphQLSchema,
+  GraphQLUnionType,
   InlineFragmentNode,
   NamedTypeNode,
   SelectionNode,
@@ -27,6 +28,7 @@ function isFragmentSpread(node: SelectionNode): node is FragmentSpreadNode {
 }
 
 function satisfiesTypeCondition(
+  unionMap: Record<string, GraphQLUnionType>,
   type: GraphQLObjectType | GraphQLInterfaceType,
   condition: NamedTypeNode,
 ): boolean {
@@ -34,14 +36,19 @@ function satisfiesTypeCondition(
     return true;
   }
 
+  if (unionMap[condition.name.value]?.getTypes().some((union) => union.name === type.name)) {
+    return true;
+  }
+
   return type.getInterfaces().some(
-    (iface) => satisfiesTypeCondition(iface, condition),
+    (iface) => satisfiesTypeCondition(unionMap, iface, condition),
   );
 }
 
 export function selectionFields(
   schema: GraphQLSchema,
   fragmentMap: FragmentDefinitionMap,
+  unionMap: Record<string, GraphQLUnionType>,
   selections: ReadonlyArray<SelectionNode>,
   type: GraphQLObjectType,
 ): FieldNode[] {
@@ -52,7 +59,7 @@ export function selectionFields(
 
     if (isInlineFragment(node)) {
       if (
-        !node.typeCondition || !satisfiesTypeCondition(type, node.typeCondition)
+        !node.typeCondition || !satisfiesTypeCondition(unionMap, type, node.typeCondition)
       ) {
         return [];
       }
@@ -60,6 +67,7 @@ export function selectionFields(
       return selectionFields(
         schema,
         fragmentMap,
+        unionMap,
         node.selectionSet.selections,
         type,
       );
@@ -73,7 +81,7 @@ export function selectionFields(
 
       if (
         !fragment.typeCondition ||
-        !satisfiesTypeCondition(type, fragment.typeCondition)
+        !satisfiesTypeCondition(unionMap, type, fragment.typeCondition)
       ) {
         return [];
       }
@@ -81,6 +89,7 @@ export function selectionFields(
       return selectionFields(
         schema,
         fragmentMap,
+        unionMap,
         fragment.selectionSet.selections,
         type,
       );

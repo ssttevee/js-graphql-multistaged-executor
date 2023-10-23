@@ -132,6 +132,7 @@ function equivalentPathKey(a: string | number | undefined, b: string | number | 
 function buildUnresolvedFields(
   schema: GraphQLSchema,
   fragmentMap: FragmentDefinitionMap,
+  unionMap: Record<string, GraphQLUnionType>,
   prevPath: Path | undefined,
   parentType: ParentType,
   sourceValue: any,
@@ -140,6 +141,7 @@ function buildUnresolvedFields(
   return selectionFields(
     schema,
     fragmentMap,
+    unionMap,
     selectionNodes,
     parentType.type,
   ).map(
@@ -318,6 +320,10 @@ export function createExecuteFn<TDeferred>(
       throw new Error(`missing ${operation.operation} type`);
     }
 
+    const unions = Object.fromEntries(
+      Object.entries(schema.getTypeMap()).filter((pair): pair is [string, GraphQLUnionType]  => pair[1] instanceof GraphQLUnionType),
+    );
+
     const ctx: ResolveContext = {
       schema,
       fragments: Object.fromEntries(
@@ -335,7 +341,7 @@ export function createExecuteFn<TDeferred>(
 
       const completedFields: Array<{ path: Path; value: any; fieldNode?: FieldNode; serialize: SerializeFunction }> = [];
 
-      const step1_resolve: Array<FieldToResolve<TDeferred>> = buildUnresolvedFields(schema, ctx.fragments, undefined, { type: rootType }, rootValue, operation.selectionSet.selections);
+      const step1_resolve: Array<FieldToResolve<TDeferred>> = buildUnresolvedFields(schema, ctx.fragments, unions, undefined, { type: rootType }, rootValue, operation.selectionSet.selections);
       const step2_discriminate: Array<FieldToDiscriminate<TDeferred>> = [];
       const step3_validate: Array<FieldToValidate> = [];
 
@@ -481,7 +487,7 @@ export function createExecuteFn<TDeferred>(
                   .map(({ concreteType, ...rest }) => ({
                     ...rest,
                     concreteType,
-                    selectedFieldNodes: selectionFields(ctx.schema, ctx.fragments, fieldNode.selectionSet?.selections ?? [], concreteType),
+                    selectedFieldNodes: selectionFields(ctx.schema, ctx.fragments, unions, fieldNode.selectionSet?.selections ?? [], concreteType),
                   }));
 
                 const typeFieldsMap = Object.fromEntries(
@@ -544,6 +550,7 @@ export function createExecuteFn<TDeferred>(
                   selectedFieldNodes: selectionFields(
                     ctx.schema,
                     ctx.fragments,
+                    unions,
                     fieldNode.selectionSet?.selections ?? [],
                     namedFieldType,
                   ),
@@ -725,6 +732,7 @@ export function createExecuteFn<TDeferred>(
                 ...buildUnresolvedFields(
                   schema,
                   ctx.fragments,
+                  unions,
                   path,
                   {
                     type: concreteType,
