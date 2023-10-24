@@ -1,4 +1,4 @@
-import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, Merge, errors, ContainsField, IsArray, IsObject, And, IsNull, ExprArg } from "faunadb";
+import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equals, Merge, errors, ContainsField, IsArray, IsObject, And, IsNull, ExprArg, QueryOptions } from "faunadb";
 import {
   ExecutionArgs,
   FieldNode,
@@ -58,7 +58,7 @@ function wrapChildObject(varName: string, dataContainer: any) {
   );
 }
 
-export type QueryFunction = (client: Client, query: ExprArg, executionArgs: ExecutionArgs) => any;
+export type QueryFunction = (client: Client, query: ExprArg, executionArgs: ExecutionArgs, options?: QueryOptions | undefined) => any;
 
 export type QueryMiddleware = Middleware<QueryFunction>;
 
@@ -68,16 +68,18 @@ export interface CreateExecutorBackendOptions {
 
 const realQuerySymbol = Symbol("real query");
 
+function defaultQueryFunction(client: Client, query: ExprArg, executionArgs: ExecutionArgs, options: QueryOptions | undefined) {
+  (executionArgs.contextValue as any)[realQuerySymbol] = query;
+  return client.query(query, options);
+}
+
 export default function createExecutorBackend(
   input?: ClientConfig | Client,
   options: CreateExecutorBackendOptions = {},
 ): ExecutorBackend<Expr> {
   const client = input instanceof Client ? input : new Client(input);
 
-  const runQuery = flattenMiddleware(options.queryMiddleware)((c, q, e) => {
-    (e.contextValue as any)[realQuerySymbol] = q;
-    return c.query(q);
-  });
+  const runQuery = flattenMiddleware(options.queryMiddleware)(defaultQueryFunction);
 
   const wrapSourceValue = (
     sourceValue: unknown,
