@@ -993,3 +993,22 @@ test("nonNullError", async () => {
     ],
   });
 });
+
+test("overlapping fragments", async () => {
+  const result = await execute({
+    schema,
+    document: parse(`query { helloWrapped(name: "world") { recurseDeferred { deferred } } ...on Query { helloWrapped(name: "world") { recurseDeferred { __typename string } } } }`),
+    rootValue: null,
+  });
+  expect(JSON.parse(JSON.stringify(result))).toEqual({
+    data: {
+      helloWrapped: {
+        recurseDeferred: {
+          __typename: "WrappedString",
+          deferred: "Hello world",
+          string: "Hello world",
+        }
+      }
+    },
+  });
+})

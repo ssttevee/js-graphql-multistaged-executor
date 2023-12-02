@@ -45,6 +45,50 @@ function satisfiesTypeCondition(
   );
 }
 
+/**
+ * Deduplicate selection set by merging fields with the same name.
+ */
+function dedupeSelection(fieldNodes: FieldNode[]): FieldNode[] {
+  const fieldsByKey: Record<string, FieldNode> = {};
+  for (const node of fieldNodes) {
+    const key = node.alias?.value ?? node.name.value;
+    if (!fieldsByKey[key]) {
+      fieldsByKey[key] = node;
+      continue;
+    }
+
+    // got duplicate
+    const existing = fieldsByKey[key];
+
+    // verify that the fields are identical
+    const existingArgs = JSON.stringify(existing.arguments, (key, value) => key === 'loc' ? undefined : value);
+    const nodeArgs = JSON.stringify(node.arguments, (key, value) => key === 'loc' ? undefined : value);
+    if (existingArgs !== nodeArgs) {
+      throw new Error("duplicate field with different arguments: " + key + " (" + existingArgs + " != " + nodeArgs + ")");
+    }
+
+    const existingDirectives = JSON.stringify(existing.directives, (key, value) => key === 'loc' ? undefined : value);
+    const nodeDirectives = JSON.stringify(node.directives, (key, value) => key === 'loc' ? undefined : value);
+    if (existingDirectives !== nodeDirectives) {
+      throw new Error("duplicate field with different directives: " + key + " (" + existingDirectives + " != " + nodeDirectives + ")");
+    }
+
+    // merge selection set
+    if (existing.selectionSet && node.selectionSet) {
+      fieldsByKey[key] = {
+        ...existing,
+        selectionSet: {
+          ...existing.selectionSet,
+          selections: [...existing.selectionSet.selections, ...node.selectionSet.selections],
+        },
+      };
+    }
+  }
+
+
+  return Object.values(fieldsByKey);
+}
+
 export function selectionFields(
   schema: GraphQLSchema,
   fragmentMap: FragmentDefinitionMap,
@@ -52,49 +96,51 @@ export function selectionFields(
   selections: ReadonlyArray<SelectionNode>,
   type: GraphQLObjectType,
 ): FieldNode[] {
-  return selections.flatMap((node): FieldNode[] => {
-    if (isField(node)) {
-      return [node];
-    }
-
-    if (isInlineFragment(node)) {
-      if (
-        !node.typeCondition || !satisfiesTypeCondition(unionMap, type, node.typeCondition)
-      ) {
-        return [];
+  return dedupeSelection(
+    selections.flatMap((node): FieldNode[] => {
+      if (isField(node)) {
+        return [node];
       }
-
-      return selectionFields(
-        schema,
-        fragmentMap,
-        unionMap,
-        node.selectionSet.selections,
-        type,
-      );
-    }
-
-    if (isFragmentSpread(node)) {
-      const fragment = fragmentMap[node.name.value];
-      if (!fragment) {
-        throw new Error("missing fragment definition: " + node.name.value);
+  
+      if (isInlineFragment(node)) {
+        if (
+          !node.typeCondition || !satisfiesTypeCondition(unionMap, type, node.typeCondition)
+        ) {
+          return [];
+        }
+  
+        return selectionFields(
+          schema,
+          fragmentMap,
+          unionMap,
+          node.selectionSet.selections,
+          type,
+        );
       }
-
-      if (
-        !fragment.typeCondition ||
-        !satisfiesTypeCondition(unionMap, type, fragment.typeCondition)
-      ) {
-        return [];
+  
+      if (isFragmentSpread(node)) {
+        const fragment = fragmentMap[node.name.value];
+        if (!fragment) {
+          throw new Error("missing fragment definition: " + node.name.value);
+        }
+  
+        if (
+          !fragment.typeCondition ||
+          !satisfiesTypeCondition(unionMap, type, fragment.typeCondition)
+        ) {
+          return [];
+        }
+  
+        return selectionFields(
+          schema,
+          fragmentMap,
+          unionMap,
+          fragment.selectionSet.selections,
+          type,
+        );
       }
-
-      return selectionFields(
-        schema,
-        fragmentMap,
-        unionMap,
-        fragment.selectionSet.selections,
-        type,
-      );
-    }
-
-    return [];
-  });
+  
+      return [];
+    }),
+  );
 }
