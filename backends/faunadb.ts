@@ -2,6 +2,7 @@ import { Client, Expr, Let, Select, Var, Map, Lambda, type ClientConfig, If, Equ
 import {
   ExecutionArgs,
   FieldNode,
+  GraphQLAbstractType,
   GraphQLError,
   GraphQLInterfaceType,
   GraphQLObjectType,
@@ -59,11 +60,14 @@ function wrapChildObject(varName: string, dataContainer: any) {
 }
 
 export type QueryFunction = (client: Client, query: ExprArg, executionArgs: ExecutionArgs, options?: QueryOptions | undefined) => any;
+export type TypeResolver = (abstractType: GraphQLAbstractType, value: Expr, executionArgs: ExecutionArgs) => Expr;
 
 export type QueryMiddleware = Middleware<QueryFunction>;
+export type TypeResolverMiddleware = Middleware<TypeResolver>;
 
 export interface CreateExecutorBackendOptions {
   queryMiddleware?: QueryMiddleware | QueryMiddleware[];
+  typeResolverMiddleware?: TypeResolverMiddleware | TypeResolverMiddleware[];
 }
 
 const realQuerySymbol = Symbol("real query");
@@ -73,6 +77,10 @@ function defaultQueryFunction(client: Client, query: ExprArg, executionArgs: Exe
   return client.query(query, options);
 }
 
+function defaultTypeResolver(abstractType: GraphQLAbstractType, value: Expr) {
+  return Select("__typename", value, { '@error': 'failed to resolve type for ' + abstractType.name });
+}
+
 export default function createExecutorBackend(
   input?: ClientConfig | Client,
   options: CreateExecutorBackendOptions = {},
@@ -80,6 +88,7 @@ export default function createExecutorBackend(
   const client = input instanceof Client ? input : new Client(input);
 
   const runQuery = flattenMiddleware(options.queryMiddleware)(defaultQueryFunction);
+  const resolveType = flattenMiddleware(options.typeResolverMiddleware)(defaultTypeResolver);
 
   const wrapSourceValue = (
     sourceValue: unknown,
@@ -246,7 +255,7 @@ export default function createExecutorBackend(
         };
       });
     },
-    expandAbstractType: (schema, path, deferredValue, abstractType, handleArray, setDeferred) => {
+    expandAbstractType: (schema, path, deferredValue, abstractType, handleArray, setDeferred, executionArgs) => {
       let concreteTypes: readonly GraphQLObjectType[];
       if (abstractType instanceof GraphQLInterfaceType) {
         concreteTypes = findImplementors(schema, abstractType);
@@ -272,13 +281,20 @@ export default function createExecutorBackend(
           varName,
           Let(
             {
-              [varNameType]: Select("__typename", Var(varName), null)
+              [varNameType]: resolveType(abstractType, Var(varName), executionArgs),
             },
-            Merge(
-              expr,
-              {
-                __typename: Var(varNameType),
-              }
+            If(
+              And(
+                IsObject(Var(varNameType)),
+                ContainsField("@error", Var(varNameType)),
+              ),
+              Var(varNameType),
+              Merge(
+                expr,
+                {
+                  __typename: Var(varNameType),
+                }
+              ),
             ),
           )
         );

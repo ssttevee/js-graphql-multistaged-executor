@@ -138,7 +138,7 @@ export function expandFromObject(obj: any, deferredPath: Array<string | number>,
       const errorMessage = getErrorMessage?.(obj);
       if (errorMessage) {
         throw new GraphQLError(errorMessage, {
-          path: deferredPath.slice(0, i),
+          path: deferredPath.slice(0, i + 1),
         });
       }
 

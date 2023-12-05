@@ -73,7 +73,7 @@ export interface ExecutorBackend<TDeferred> {
     setDeferred: (data: TDeferred) => void,
     suppressArrayHandling?: boolean,
   ): Array<ExpandedChild>;
-  expandAbstractType?: (schema: GraphQLSchema, path: Path, abstractValue: TDeferred, abstractType: GraphQLAbstractType, handleArray: boolean, setDeferred: (data: TDeferred) => void) => Array<ExpandedAbstractType>;
+  expandAbstractType?: (schema: GraphQLSchema, path: Path, abstractValue: TDeferred, abstractType: GraphQLAbstractType, handleArray: boolean, setDeferred: (data: TDeferred) => void, executionArgs: ExecutionArgs) => Array<ExpandedAbstractType>;
   getErrorMessage?: (value: unknown) => string | null;
 }
 
@@ -483,7 +483,7 @@ export function createExecuteFn<TDeferred>(
                 }
 
                 const expanded = backend
-                  .expandAbstractType(schema, path, fieldValue, namedFieldType, isListType(fieldType) || (isNonNullType(fieldType) && isListType(fieldType.ofType)), setDeferredChild)
+                  .expandAbstractType(schema, path, fieldValue, namedFieldType, isListType(fieldType) || (isNonNullType(fieldType) && isListType(fieldType.ofType)), setDeferredChild, args)
                   .map(({ concreteType, ...rest }) => ({
                     ...rest,
                     concreteType,
