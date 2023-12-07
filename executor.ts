@@ -918,7 +918,17 @@ export function createExecuteFn<TDeferred>(
 
       const result: ExecutionResult<T> = { data: resultData as T };
       if (resultErrors.length) {
-        result.errors = resultErrors;
+        // dedupe errors
+        const fingerprints = new Set();
+        result.errors = [];
+        for (const error of resultErrors) {
+            const fingerprint = JSON.stringify(error);
+            if (fingerprints.has(fingerprint) && fingerprints.add(fingerprint)) {
+                continue;
+            }
+
+            (result.errors as GraphQLError[]).push(error);
+        }
       }
 
       return result;
