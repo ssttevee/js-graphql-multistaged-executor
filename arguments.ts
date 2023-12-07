@@ -18,7 +18,7 @@ function isNullValue(value: any): boolean {
 function parseVariableValue(value: unknown, type: GraphQLInputType): unknown {
   if (isNonNullType(type)) {
     if (isNullValue(value)) {
-      return new GraphQLError("found null value for non-null input type");
+      throw new GraphQLError("found null value for non-null input type");
     }
 
     type = type.ofType;
@@ -28,7 +28,7 @@ function parseVariableValue(value: unknown, type: GraphQLInputType): unknown {
 
   if (isListType(type)) {
     if (!Array.isArray(value)) {
-      return new GraphQLError("found non-array value for list input type");
+      throw new GraphQLError("found non-array value for list input type");
     }
 
     const itemType = type.ofType;
@@ -40,7 +40,7 @@ function parseVariableValue(value: unknown, type: GraphQLInputType): unknown {
   }
 
   if (typeof value !== "object" || value === null) {
-    return new GraphQLError("found non-object value for object input type");
+    throw new GraphQLError("found non-object value for object input type");
   }
 
   return Object.fromEntries(
@@ -133,7 +133,7 @@ export function resolveArguments(
       const valueNode = valueNodeMap[arg.name];
       if (!valueNode) {
         if (!nullable) {
-          throw new Error(`missing required argument ${arg.name}`);
+          throw new Error(`missing required argument: ${arg.name}`);
         }
 
         return [arg.name, arg.defaultValue];
@@ -141,7 +141,7 @@ export function resolveArguments(
 
       const value = resolveArgument(valueNode, type, variables) ?? null;
       if (value === null && !nullable) {
-        throw new Error(`missing required argument ${arg.name}`);
+        throw new Error(`missing required argument: ${arg.name}`);
       }
 
       return [arg.name, value];
