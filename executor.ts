@@ -7,7 +7,6 @@ import {
   FragmentDefinitionNode,
   getNamedType,
   GraphQLAbstractType,
-  GraphQLEnumType,
   GraphQLError,
   GraphQLField,
   GraphQLFieldResolver,
@@ -21,10 +20,10 @@ import {
   GraphQLTypeResolver,
   GraphQLUnionType,
   isAbstractType,
+  isLeafType,
   isListType,
   isNonNullType,
   OperationDefinitionNode,
-  OperationTypeNode,
   SelectionNode,
 } from "graphql";
 import { addPath, Path, pathToArray } from "graphql/jsutils/Path";
@@ -455,7 +454,7 @@ export function createExecuteFn<TDeferred>(
               }
 
               const namedFieldType = getNamedType(fieldType);
-              if (namedFieldType instanceof GraphQLEnumType || namedFieldType instanceof GraphQLScalarType) {
+              if (isLeafType(namedFieldType)) {
                 // console.log('step2_discriminate: send to step5_revalidate', pathToArray(path), deferredPath);
                 step5_revalidate.push({
                   fieldType,
@@ -653,7 +652,6 @@ export function createExecuteFn<TDeferred>(
                   })));
                 }
 
-
                 continue;
               } else {
                 if (Array.isArray(fieldValue) && !(fieldType instanceof GraphQLScalarType)) {
@@ -670,7 +668,7 @@ export function createExecuteFn<TDeferred>(
                 }
               }
 
-              if (fieldType instanceof GraphQLScalarType || fieldType instanceof GraphQLEnumType) {
+              if (isLeafType(fieldType)) {
                 // console.log('step3_validate: send to completedFields (3)', pathToArray(path), fieldValue);
                 completedFields.push({ path, value: fieldValue, fieldNode, serialize: getSerializer(fieldValue, fieldType, parentType.type, path, args) ?? identity });
                 continue;
