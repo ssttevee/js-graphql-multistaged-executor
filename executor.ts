@@ -914,7 +914,7 @@ export function createExecuteFn<TDeferred>(
         }
       }
 
-      const result: ExecutionResult<T> = { data: resultData as T };
+      const result: ExecutionResult<T> = { data: Object.keys(resultData).length ? resultData as T : null };
       if (resultErrors.length) {
         // dedupe errors
         const fingerprints = new Set();
