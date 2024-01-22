@@ -266,30 +266,34 @@ export type TypeResolverMiddleware<TSource, TContext> = Middleware<GraphQLTypeRe
 
 export type SerializerGetterMiddleware<TSource, TContext> = Middleware<SerializerGetter<TSource, TContext>>;
 
+export type ResolveDeferredValuesMiddleware<TDeferred> = Middleware<ExecutorBackend<TDeferred>['resolveDeferredValues']>
+
 type MaybeArray<T> = T | T[];
 
-interface Middlewares<TSource, TContext> {
+interface Middlewares<TSource, TContext, TDeferred> {
   fieldResolverMiddleware?: MaybeArray<FieldResolverMiddleware<TSource, TContext>>;
   fieldResolverGetterMiddleware?: MaybeArray<FieldResolverGetterMiddleware<TSource, TContext>>;
   typeResolverMiddleware?: MaybeArray<TypeResolverMiddleware<TSource, TContext>>;
   typeResolverGetterMiddleware?: MaybeArray<TypeResolverGetterMiddleware<TSource, TContext>>;
   serializerGetterMiddleware?: MaybeArray<SerializerGetterMiddleware<TSource, TContext>>;
+  resolveDeferredValuesMiddleware?: MaybeArray<ResolveDeferredValuesMiddleware<TDeferred>>;
 }
 
-export interface CreateExecuteFnOptions<TSource, TContext> extends Middlewares<TSource, TContext> {
+export interface CreateExecuteFnOptions<TSource, TContext, TDeferred> extends Middlewares<TSource, TContext, TDeferred> {
 }
 
 export function createExecuteFn<TDeferred>(
   backend: ExecutorBackend<TDeferred>,
-  options: CreateExecuteFnOptions<unknown, unknown> = {},
+  options: CreateExecuteFnOptions<unknown, unknown, TDeferred> = {},
 ): <T = any>(args: ExecutionArgs) => Promise<ExecutionResult<T>> {
   const rootFieldResolverMiddleware = flattenMiddleware(options.fieldResolverMiddleware);
   const rootFieldResolverGetterMiddleware = flattenMiddleware(options.fieldResolverGetterMiddleware);
   const rootTypeResolverMiddleware = flattenMiddleware(options.typeResolverMiddleware);
   const rootTypeResolverGetterMiddleware = flattenMiddleware(options.typeResolverGetterMiddleware);
   const rootSerializerGetterMiddleware = flattenMiddleware(options.serializerGetterMiddleware);
+  const rootResolveDeferredValuesMiddleware = flattenMiddleware(options.resolveDeferredValuesMiddleware);
 
-  return async function execute<T = any>(args: ExecutionArgs & Middlewares<unknown, unknown>): Promise<ExecutionResult<T>> {
+  return async function execute<T = any>(args: ExecutionArgs & Middlewares<unknown, unknown, TDeferred>): Promise<ExecutionResult<T>> {
     const {
       schema,
       rootValue,
@@ -301,6 +305,7 @@ export function createExecuteFn<TDeferred>(
     const typeResolverMiddleware = flattenMiddleware([flattenMiddleware(args.typeResolverMiddleware), rootTypeResolverMiddleware]);
     const getTypeResolver = flattenMiddleware([flattenMiddleware(args.typeResolverGetterMiddleware), rootTypeResolverGetterMiddleware])(defaultTypeResolverGetter);
     const getSerializer = flattenMiddleware([flattenMiddleware(args.serializerGetterMiddleware), rootSerializerGetterMiddleware])(defaultSerializerGetter);
+    const resolveDeferredValues = flattenMiddleware([flattenMiddleware(args.resolveDeferredValuesMiddleware), rootResolveDeferredValuesMiddleware])(backend.resolveDeferredValues);
 
     /**
      * GOALS:
@@ -753,7 +758,7 @@ export function createExecuteFn<TDeferred>(
         }
 
         if (deferredExprs.length) {
-          const deferredValues = await backend.resolveDeferredValues(deferredExprs, args);
+          const deferredValues = await resolveDeferredValues(deferredExprs, args);
           // console.log(`resolved ${deferredExprs.length} deferred values`, deferredValues);
 
           while (step4_restage.length) {
