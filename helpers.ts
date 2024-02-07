@@ -13,3 +13,4 @@ export function getRootType(schema: GraphQLSchema, operation: OperationDefinitio
 }
 
 export * from './arguments';
+export * from './ast';
