@@ -4,7 +4,7 @@ import dts from "rollup-plugin-dts";
 const input = {
   lib: "executor.ts",
   helpers: "helpers.ts",
-  'backends/faunadb': "backends/faunadb.ts",
+  "backends/faunadb": "backends/faunadb.ts",
 };
 
 const external = [
@@ -21,14 +21,18 @@ export default [
       {
         entryFileNames: "[name].mjs",
         chunkFileNames: "[name]-[hash].mjs",
+        paths: {
+          "graphql/jsutils/Path": "graphql/jsutils/Path.mjs",
+          "graphql/execution/execute": "graphql/execution/execute.mjs",
+        },
         format: "esm",
-        dir: './',
+        dir: "./",
       },
       {
         entryFileNames: "[name].cjs",
         chunkFileNames: "[name]-[hash].cjs",
         format: "cjs",
-        dir: './',
+        dir: "./",
       },
     ],
     external,
@@ -42,9 +46,7 @@ export default [
           },
           moduleResolution: "node",
         },
-        exclude: [
-          /_test\.ts$/,
-        ]
+        exclude: [/_test\.ts$/],
       }),
     ],
   },
@@ -53,12 +55,10 @@ export default [
     output: [
       {
         entryFileNames: "[name].d.ts",
-        dir: './',
+        dir: "./",
       },
     ],
     external,
-    plugins: [
-      dts(),
-    ],
-  }
-]
+    plugins: [dts()],
+  },
+];
