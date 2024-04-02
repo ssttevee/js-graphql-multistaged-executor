@@ -33,6 +33,7 @@ export default [
         chunkFileNames: "[name]-[hash].cjs",
         format: "cjs",
         dir: "./",
+        outro: `if (exports.default) {\n    Object.assign(exports.default, exports);\n    module.exports = exports.default;\n}\n`
       },
     ],
     external,
