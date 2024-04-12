@@ -53,7 +53,7 @@ function parseVariableValue(value: unknown, type: GraphQLInputType): unknown {
 function resolveArgument(
   valueNode: ValueNode,
   type: GraphQLInputType,
-  variables: Record<string, unknown> | undefined,
+  variables: Record<string, unknown> | null | undefined,
 ): unknown {
   try {
     if (isNonNullType(type)) {
@@ -112,7 +112,7 @@ function resolveArgument(
 }
 
 export function resolveArguments(
-  variables: Record<string, any> = {},
+  variables: Record<string, any> | null | undefined,
   nodes: readonly ArgumentNode[] | undefined,
   args: readonly GraphQLArgument[],
 ): Record<string, any> {
