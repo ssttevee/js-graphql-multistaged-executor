@@ -36,8 +36,8 @@ import { flattenMiddleware, isNullValue, Middleware, partition, selectFromObject
 import { getRootType } from "./helpers";
 
 export type WrappedValue<T> = PromiseLike<T> & (
-  T extends Array<infer E> ? Array<WrappedValue<E>> :
-  T extends object ? { [P in keyof T]-?: WrappedValue<T[P]> } :
+  Exclude<T, null | undefined> extends Array<infer E> ? Array<WrappedValue<E>> :
+  Exclude<T, null | undefined> extends object ? { [P in keyof T]-?: WrappedValue<T[P]> } :
   unknown
 );
 
