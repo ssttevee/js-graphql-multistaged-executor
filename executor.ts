@@ -364,7 +364,8 @@ export function createExecuteFn<TDeferred>(
               const fieldDef = getFieldDef(schema, parentType.type, fieldNode)!;
               const resolveField = overrideFieldResolver ?? getFieldResolver(fieldDef, args, defaultFieldResolver);
 
-              let sourceValue = await originalSourceValue;
+              let unwrappedSourceValue = await originalSourceValue;
+              let sourceValue = unwrappedSourceValue;
               if (backend.isDeferredValue(sourceValue)) {
                 sourceValue = backend.wrapSourceValue(
                   sourceValue,
@@ -399,6 +400,10 @@ export function createExecuteFn<TDeferred>(
                 }
 
                 fieldValue = await fieldValue;
+                
+                if (backend.isWrappedValue(fieldValue)) {
+                  fieldValue = await backend.unwrapResolvedValue(fieldValue);
+                }
 
                 // console.log('step1_resolve: send to step2_discriminate', pathToArray(path), fieldValue);
                 step2_discriminate.push({ fieldNode, fieldNodes, fieldValue, fieldType: fieldDef.type, parentType, path, deferral, shouldExcludeResult });
@@ -415,7 +420,7 @@ export function createExecuteFn<TDeferred>(
               }
 
               // console.log('step1_resolve: send to step4_restage', pathToArray(prevPath));
-              deferral.set(sourceValue);
+              deferral.set(unwrappedSourceValue);
               step4_restage.push({
                 fieldNode,
                 fieldNodes,
