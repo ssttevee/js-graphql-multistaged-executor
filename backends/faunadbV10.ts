@@ -37,11 +37,45 @@ function isExpr(e: any): e is Query {
 type V4Expr = import("faunadb").ExprVal;
 
 function isV4Expr(e: any): e is V4Expr {
-  return Boolean(!e?.[wrapped] && e?._isFaunaExpr);
+  if (e?.[wrapped]) {
+    return false;
+  }
+
+  if (e?._isFaunaExpr) {
+    return true;
+  }
+
+  let prototype = e?.prototype ?? e?.constructor?.prototype;
+  while (prototype) {
+    if (prototype._isFaunaExpr) {
+      return true;
+    }
+
+    prototype = prototype.prototype;
+  }
+
+  return false;
 }
 
 function isV4Value(e: any): boolean {
-  return Boolean(!e?.[wrapped] && e?._isFaunaValue);
+  if (e?.[wrapped]) {
+    return false;
+  }
+
+  if (e?._isFaunaValue) {
+    return true;
+  }
+
+  let prototype = e?.prototype ?? e?.constructor?.prototype;
+  while (prototype) {
+    if (prototype._isFaunaValue) {
+      return true;
+    }
+
+    prototype = prototype.prototype;
+  }
+
+  return false;
 }
 
 function customFQL(
@@ -88,39 +122,50 @@ function queryToString(query: string | QueryInterpolation | Query): string {
   return queryToString(query.fql);
 }
 
+function normalizeV4Object(obj: Record<string, any>): Record<string, any> {
+  return Object.fromEntries(
+    Object.entries(obj).map(([k, v]) => {
+      return [k, normalizeV4Query(v)];
+    }),
+  );
+}
+
 function normalizeV4Query(query: any): any {
-  if (!isV4Expr(query)) {
+  if (Array.isArray(query)) {
+    return query.map(normalizeV4Query)
+  }
+
+  if (query?.[wrapped]) {
     return unwrapValue(query);
   }
-  
+
   if (isV4Value(query)) {
     return JSON.parse(JSON.stringify(query));
   }
 
-  const raw: any = (query as any).raw;
-  if (!raw) {
-    return raw;
+  if (!isV4Expr(query)) {
+    return query;
   }
 
+  const raw: any = (query as any).raw;
   if (Array.isArray(raw)) {
     return raw.map(normalizeV4Query);
   }
 
   if (raw.object) {
-    return {
-      object: Object.fromEntries(
-        Object.entries(raw.object).map(([k, v]) => {
-          return [k, normalizeV4Query(v)];
-        }),
-      ),
-    };
+    return { object: normalizeV4Object(raw.object) };
   }
 
-  return Object.fromEntries(
-    Object.entries(raw).map(([k, v]) => {
-      return [k, normalizeV4Query(v)];
-    }),
-  );
+  if (raw.let) {
+    if (Array.isArray(raw.let)) {
+      return {
+        let: raw.let.map(normalizeV4Object),
+        in: normalizeV4Query(raw.in),
+      };
+    }
+  }
+
+  return normalizeV4Object(raw);
 }
 
 export function v4ToV10(query: V4Expr): Query {
