@@ -1,8 +1,20 @@
-import { GraphQLError, GraphQLInterfaceType, GraphQLObjectType, GraphQLSchema } from "graphql";
+import {
+  GraphQLError,
+  type GraphQLInterfaceType,
+  GraphQLObjectType,
+  type GraphQLSchema,
+} from "graphql";
 
-const implementorsCache = new WeakMap<GraphQLInterfaceType, readonly GraphQLObjectType[]>();
+const implementorsCache = new WeakMap<
+  GraphQLInterfaceType,
+  readonly GraphQLObjectType[]
+>();
 
-export function findImplementors(schema: GraphQLSchema, iface: GraphQLInterfaceType, cache = implementorsCache): readonly GraphQLObjectType[] {
+export function findImplementors(
+  schema: GraphQLSchema,
+  iface: GraphQLInterfaceType,
+  cache = implementorsCache,
+): readonly GraphQLObjectType[] {
   if (cache?.has(iface)) {
     return cache.get(iface)!;
   }
@@ -25,7 +37,11 @@ export function findImplementors(schema: GraphQLSchema, iface: GraphQLInterfaceT
   return implementors;
 }
 
-export function selectFromObject(obj: any, path: Array<string | number>, getErrorMessage?: (value: any) => string | null): any {
+export function selectFromObject(
+  obj: any,
+  path: Array<string | number>,
+  getErrorMessage?: (value: any) => string | null,
+): any {
   for (const [i, key] of path.entries()) {
     const errorMessage = getErrorMessage?.(obj);
     if (errorMessage) {
@@ -40,9 +56,18 @@ export function selectFromObject(obj: any, path: Array<string | number>, getErro
   return obj;
 }
 
-export function partition<T, U>(arr: Array<T | U>, predicate: (item: T | U) => item is T): [T[], U[]];
-export function partition<T>(arr: Array<T>, predicate: (item: T) => boolean): [T[], T[]];
-export function partition(arr: Array<any>, predicate: (item: any) => boolean): [any[], any[]] {
+export function partition<T, U>(
+  arr: Array<T | U>,
+  predicate: (item: T | U) => item is T,
+): [T[], U[]];
+export function partition<T>(
+  arr: Array<T>,
+  predicate: (item: T) => boolean,
+): [T[], T[]];
+export function partition(
+  arr: Array<any>,
+  predicate: (item: any) => boolean,
+): [any[], any[]] {
   const a: any[] = [];
   const b: any[] = [];
 
@@ -63,10 +88,12 @@ export function isNullValue(value: unknown): value is null | undefined {
 
 export type Middleware<F extends (...args: any[]) => any> = {
   (next: F): F;
-}
+};
 
-export function flattenMiddleware<F extends (this: void, ...args: any[]) => any>(middleware?: Middleware<F> | Middleware<F>[]): Middleware<F> {
-  if (typeof middleware === 'function') {
+export function flattenMiddleware<
+  F extends (this: void, ...args: any[]) => any,
+>(middleware?: Middleware<F> | Middleware<F>[]): Middleware<F> {
+  if (typeof middleware === "function") {
     return middleware;
   }
 
@@ -78,4 +105,15 @@ export function flattenMiddleware<F extends (this: void, ...args: any[]) => any>
     (stack, middleware) => (next) => middleware(stack(next)),
     (next) => next,
   );
+}
+
+export function zip<A, B>(a: A[], b: B[]): [A, B][];
+export function zip<Arrs extends unknown[][]>(
+  ...arrs: Arrs
+): Arrs[number][number][];
+export function zip<Arrs extends unknown[][]>(
+  ...arrs: Arrs
+): Arrs[number][number][] {
+  const length = Math.min(...arrs.map((arr) => arr.length));
+  return Array.from({ length }, (_, i) => arrs.map((arr) => arr[i])) as any;
 }

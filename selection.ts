@@ -1,4 +1,4 @@
-import {
+import type {
   FieldNode,
   FragmentDefinitionNode,
   FragmentSpreadNode,
@@ -36,13 +36,17 @@ function satisfiesTypeCondition(
     return true;
   }
 
-  if (unionMap[condition.name.value]?.getTypes().some((union) => union.name === type.name)) {
+  if (
+    unionMap[condition.name.value]
+      ?.getTypes()
+      .some((union) => union.name === type.name)
+  ) {
     return true;
   }
 
-  return type.getInterfaces().some(
-    (iface) => satisfiesTypeCondition(unionMap, iface, condition),
-  );
+  return type
+    .getInterfaces()
+    .some((iface) => satisfiesTypeCondition(unionMap, iface, condition));
 }
 
 /**
@@ -61,16 +65,29 @@ function dedupeSelection(fieldNodes: FieldNode[]): FieldNode[] {
     const existing = fieldsByKey[key];
 
     // verify that the fields are identical
-    const existingArgs = JSON.stringify(existing.arguments, (key, value) => key === 'loc' ? undefined : value);
-    const nodeArgs = JSON.stringify(node.arguments, (key, value) => key === 'loc' ? undefined : value);
+    const existingArgs = JSON.stringify(existing.arguments, (key, value) =>
+      key === "loc" ? undefined : value,
+    );
+    const nodeArgs = JSON.stringify(node.arguments, (key, value) =>
+      key === "loc" ? undefined : value,
+    );
     if (existingArgs !== nodeArgs) {
-      throw new Error("duplicate field with different arguments: " + key + " (" + existingArgs + " != " + nodeArgs + ")");
+      throw new Error(
+        `duplicate field with different arguments: ${key} (${existingArgs} != ${nodeArgs})`,
+      );
     }
 
-    const existingDirectives = JSON.stringify(existing.directives, (key, value) => key === 'loc' ? undefined : value);
-    const nodeDirectives = JSON.stringify(node.directives, (key, value) => key === 'loc' ? undefined : value);
+    const existingDirectives = JSON.stringify(
+      existing.directives,
+      (key, value) => (key === "loc" ? undefined : value),
+    );
+    const nodeDirectives = JSON.stringify(node.directives, (key, value) =>
+      key === "loc" ? undefined : value,
+    );
     if (existingDirectives !== nodeDirectives) {
-      throw new Error("duplicate field with different directives: " + key + " (" + existingDirectives + " != " + nodeDirectives + ")");
+      throw new Error(
+        `duplicate field with different directives: ${key} (${existingDirectives} != ${nodeDirectives})`,
+      );
     }
 
     // merge selection set
@@ -79,12 +96,14 @@ function dedupeSelection(fieldNodes: FieldNode[]): FieldNode[] {
         ...existing,
         selectionSet: {
           ...existing.selectionSet,
-          selections: [...existing.selectionSet.selections, ...node.selectionSet.selections],
+          selections: [
+            ...existing.selectionSet.selections,
+            ...node.selectionSet.selections,
+          ],
         },
       };
     }
   }
-
 
   return Object.values(fieldsByKey);
 }
@@ -101,14 +120,15 @@ export function selectionFields(
       if (isField(node)) {
         return [node];
       }
-  
+
       if (isInlineFragment(node)) {
         if (
-          !node.typeCondition || !satisfiesTypeCondition(unionMap, type, node.typeCondition)
+          !node.typeCondition ||
+          !satisfiesTypeCondition(unionMap, type, node.typeCondition)
         ) {
           return [];
         }
-  
+
         return selectionFields(
           schema,
           fragmentMap,
@@ -117,20 +137,20 @@ export function selectionFields(
           type,
         );
       }
-  
+
       if (isFragmentSpread(node)) {
         const fragment = fragmentMap[node.name.value];
         if (!fragment) {
-          throw new Error("missing fragment definition: " + node.name.value);
+          throw new Error(`missing fragment definition: ${node.name.value}`);
         }
-  
+
         if (
           !fragment.typeCondition ||
           !satisfiesTypeCondition(unionMap, type, fragment.typeCondition)
         ) {
           return [];
         }
-  
+
         return selectionFields(
           schema,
           fragmentMap,
@@ -139,7 +159,7 @@ export function selectionFields(
           type,
         );
       }
-  
+
       return [];
     }),
   );

@@ -4,7 +4,7 @@ import dts from "rollup-plugin-dts";
 const input = {
   lib: "executor.ts",
   helpers: "helpers.ts",
-  "backends/faunadb": "backends/faunadb.ts",
+  // "backends/faunadb": "backends/faunadb.ts",
   "backends/faunadbV10": "backends/faunadbV10.ts",
 };
 
@@ -29,6 +29,7 @@ export default [
         },
         format: "esm",
         dir: "./",
+        sourcemap: true,
       },
       {
         entryFileNames: "[name].cjs",
@@ -36,6 +37,7 @@ export default [
         format: "cjs",
         dir: "./",
         outro: `if (exports.default) {\n    Object.assign(exports.default, exports);\n    module.exports = exports.default;\n}\n`,
+        sourcemap: true,
       },
     ],
     external,

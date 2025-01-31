@@ -281,14 +281,27 @@ const schema = new GraphQLSchema({
 });
 
 const execute = createExecuteFn(
-  createExecutorBackend({
-    // endpoint: new URL("https://db.us.fauna.com"),
-    // secret: "fnAFp_s3qxAARI6FUbV9uq_5Ghqci2RRe8YRo7Ln",
-    // fetch: fetch,
+  createExecutorBackend(
+    {
+      // endpoint: new URL("https://db.us.fauna.com"),
+      // secret: "fnAFp_s3qxAARI6FUbV9uq_5Ghqci2RRe8YRo7Ln",
+      // fetch: fetch,
 
-    endpoint: new URL("http://localhost:8443"),
-    secret: "secret",
-  }),
+      endpoint: new URL("http://localhost:8443"),
+      secret: "secret",
+    },
+    // {
+    //   queryMiddleware: [
+    //     (next) =>
+    //       async (...args) => {
+    //         console.log("query", JSON.stringify(args[1].encode(), null, 2));
+    //         const res = await next(...args);
+    //         console.log("result", JSON.stringify(res, null, 2));
+    //         return res;
+    //       },
+    //   ],
+    // },
+  ),
 );
 
 test("true", async () => {

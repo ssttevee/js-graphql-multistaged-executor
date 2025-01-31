@@ -15,16 +15,17 @@
     "*.d.ts"
   ],
   "scripts": {
-    "clean": "rm -f *.cjs *.d.ts *.mjs *.tgz backends/*.cjs backends/*.d.ts backends/*.mjs",
+    "clean": "rm -f *.cjs *.cjs.map *.mjs *.mjs.map *.d.ts *.tgz backends/*.cjs backends/*.cjs.map backends/*.mjs backends/*.mjs.map backends/*.d.ts",
     "prepack": "npm run clean && npm run build",
     "build": "rollup -c",
     "pretest": "npm run clean",
     "test": "jest"
   },
   "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
     "@jest/globals": "^29.6.1",
     "@rollup/plugin-typescript": "^11.1.2",
-    "fauna": "^2.2.0",
+    "fauna": "^2.4.1",
     "faunadb": "^4.8.0",
     "graphql": "^16.0.0",
     "jest": "^29.6.1",

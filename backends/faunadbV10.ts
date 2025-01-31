@@ -1,28 +1,34 @@
 import {
   Client,
-  ClientConfiguration,
+  type ClientConfiguration,
   fql,
-  QueryInterpolation,
-  QueryOptions,
-  QueryValue,
+  type QueryFailure,
+  type QueryInterpolation,
+  type QueryOptions,
+  type QuerySuccess,
+  type QueryValue,
   ServiceError,
   type Query as QueryCtor,
 } from "fauna";
 import {
-  ExecutionArgs,
-  FieldNode,
-  GraphQLAbstractType,
+  type ExecutionArgs,
+  type FieldNode,
+  type GraphQLAbstractType,
   GraphQLError,
-  GraphQLInterfaceType,
-  GraphQLObjectType,
-  GraphQLOutputType,
+  type GraphQLObjectType,
   isListType,
   isNonNullType,
+  isObjectType,
 } from "graphql";
-import { addPath, Path, pathToArray } from "graphql/jsutils/Path";
+import { addPath, type Path, pathToArray } from "graphql/jsutils/Path";
 
-import type { ExecutorBackend, WrappedValue } from "../executor";
-import { Middleware, findImplementors, flattenMiddleware } from "../utils";
+import type {
+  ExecutorBackend,
+  ExpandedChild,
+  GraphQLCompositeOutputType,
+  WrappedValue,
+} from "../executor";
+import { type Middleware, flattenMiddleware } from "../utils";
 
 // HACK: change this either when there an `isQuery` helper or when `Query` is exported
 type Query = import("fauna").Query;
@@ -79,7 +85,7 @@ function isV4Value(e: any): boolean {
 }
 
 function customFQL(
-  fragments: string[],
+  fragments: ReadonlyArray<string>,
   ...queryArgs: (QueryValue | Query | import("faunadb").ExprVal)[]
 ): Query {
   return fql(fragments, ...queryArgs.map(unwrapValue));
@@ -104,15 +110,15 @@ function queryToString(query: string | QueryInterpolation | Query): string {
   }
 
   if (typeof query !== "object") {
-    throw new Error("unexpected query type: " + typeof query);
+    throw new Error(`unexpected query type: ${typeof query}`);
   }
 
   if ("value" in query) {
-    return "${" + JSON.stringify(query.value) + "}";
+    return `\${${JSON.stringify(query.value)}}`;
   }
 
   if (!("fql" in query)) {
-    throw new Error("unexpected object shape: " + JSON.stringify(query));
+    throw new Error(`unexpected object shape: ${JSON.stringify(query)}`);
   }
 
   if (Array.isArray(query.fql)) {
@@ -131,8 +137,14 @@ function normalizeV4Object(obj: Record<string, any>): Record<string, any> {
 }
 
 function normalizeV4Query(query: any): any {
+  if (typeof query === "undefined") {
+    throw new Error(
+      "Unexpected undefined value, please use null instead if this is intentional",
+    );
+  }
+
   if (Array.isArray(query)) {
-    return query.map(normalizeV4Query)
+    return query.map(normalizeV4Query);
   }
 
   if (query?.[wrapped]) {
@@ -148,6 +160,10 @@ function normalizeV4Query(query: any): any {
   }
 
   const raw: any = (query as any).raw;
+  if (raw instanceof Query) {
+    return raw;
+  }
+
   if (Array.isArray(raw)) {
     return raw.map(normalizeV4Query);
   }
@@ -182,7 +198,7 @@ export function unwrapValue(expr: any) {
   expr = (expr as any)?.[wrapped] ? (expr as any)[original] : expr;
 
   if (Array.isArray(expr)) {
-    for (let [i, result] of expr.map(unwrapValue).entries()) {
+    for (const [i, result] of expr.map(unwrapValue).entries()) {
       expr[i] = result;
     }
   } else if (expr instanceof Object && !isExpr(expr)) {
@@ -198,42 +214,57 @@ export function unwrapValue(expr: any) {
 }
 
 function varIsErrorExpr(varName: string): Query {
-  return fql`(${fql([varName])} isa Object&&${fql([varName])}["@error"]!=null)`;
+  return fql([`(${varName} isa Object&&${varName}["@error"]!=null)`]);
 }
 
 function varIsIterableExpr(varName: string): Query {
-  return fql`(${fql([varName])} isa Set||${fql([varName])} isa Array)`;
+  return fql([`(${varName} isa Set||${varName} isa Array)`]);
 }
 
 function assertIterable(varName: string, expr: Query): Query {
-  return fql`if (!${varIsIterableExpr(varName)}) {"@error":"expected Set or Array"}else{${expr}}`;
+  return fql`if(!${varIsIterableExpr(varName)}){"@error":"expected Set or Array"}else{${expr}}`;
 }
 
 function safeMap(varName: string, fnExpr: Query): Query {
-  return assertIterable(varName, fql`${fql([varName])}.map(${fnExpr})`);
+  return assertIterable(varName, fql([`${varName}.map(`, ")"], fnExpr));
 }
 
-function chainVarErrorOrNull(varName: string, expr: QueryInput): Query {
-  return fql`if(${fql([varName])}==null)null else if(${varIsErrorExpr(varName)})${fql([varName])} else{${expr}}`;
+function chainVarErrorOrNull(
+  varName: string,
+  expr: QueryInput,
+  nullable = true,
+): Query {
+  return fql(
+    [
+      `if(${varName}==null)${nullable ? "null " : `{"@error":"Cannot return null for non-nullable field"}`}else if(`,
+      `)${varName} else{`,
+      "}",
+    ],
+    varIsErrorExpr(varName),
+    expr,
+  );
 }
 
 function dataContainerAsQuery(dataContainer: Record<string, any>): Query {
+  const keys = Object.keys(dataContainer);
   const q = fql(
     [
-      "{",
-      ...new Array(Object.keys(dataContainer).length)
-        .fill([":{", "},"])
-        .flat()
-        .slice(0, -1),
-      "}}",
+      ...keys.map(
+        (k, i) =>
+          `${i === 0 ? "{" : `\n// -- END OF ${keys[i - 1]}\n\n},`}${JSON.stringify(k)}:{\n\n// -- START OF ${k}\n`,
+      ),
+      `${keys.length ? `\n// -- END OF ${keys[keys.length - 1]}\n\n` : ""}}}`,
     ],
-    ...Object.entries(dataContainer).flatMap(([k, v]) => [
-      fql([JSON.stringify(k)]),
-      v,
-    ]),
+    ...Object.values(dataContainer),
   );
 
   return q;
+}
+
+function pathToIdent(path: Path): string {
+  return pathToArray(path)
+    .map((k) => (k === "[]" ? "_arr_" : k))
+    .join("_");
 }
 
 export type QueryFunction = (
@@ -241,19 +272,28 @@ export type QueryFunction = (
   query: Query,
   executionArgs: ExecutionArgs,
   options?: QueryOptions | undefined,
-) => any;
+) => Promise<QuerySuccess<any> | QueryFailure>;
 export type TypeResolver = (
   abstractType: GraphQLAbstractType,
   value: QueryInput,
   executionArgs: ExecutionArgs,
 ) => QueryInput;
+export type WrappedValuePropGetter = (
+  query: Query,
+  prop: string | number,
+) => Query;
 
 export type QueryMiddleware = Middleware<QueryFunction>;
 export type TypeResolverMiddleware = Middleware<TypeResolver>;
+export type WrappedValuePropGetterMiddleware =
+  Middleware<WrappedValuePropGetter>;
 
 export interface CreateExecutorBackendOptions {
   queryMiddleware?: QueryMiddleware | QueryMiddleware[];
   typeResolverMiddleware?: TypeResolverMiddleware | TypeResolverMiddleware[];
+  wrappedValuePropGetterMiddleware?:
+    | WrappedValuePropGetterMiddleware
+    | WrappedValuePropGetterMiddleware[];
 }
 
 function defaultQueryFunction(
@@ -269,8 +309,18 @@ function defaultTypeResolver(
   abstractType: GraphQLAbstractType,
   value: QueryInput,
 ) {
-  return fql`(${value})?.__typename??{"@error":${"failed to resolve type for " + abstractType.name}}`;
+  return fql`(${value})?.__typename??{"@error":${`failed to resolve type for ${abstractType.name}`}}`;
 }
+
+function defaultWrappedValuePropGetter(
+  query: Query,
+  prop: string | number,
+): Query {
+  return fql(["(", `)?.[${JSON.stringify(prop)}]`], query);
+}
+
+const nonnull = Symbol("nonnull");
+const list = Symbol("list");
 
 export default function createExecutorBackend(
   input?: ClientConfiguration | Client,
@@ -284,6 +334,9 @@ export default function createExecutorBackend(
   const resolveType = flattenMiddleware(options.typeResolverMiddleware)(
     defaultTypeResolver,
   );
+  const getWrappedValueProp = flattenMiddleware(
+    options.wrappedValuePropGetterMiddleware,
+  )(defaultWrappedValuePropGetter);
 
   const wrapSourceValue = (
     sourceValue: unknown,
@@ -322,7 +375,7 @@ export default function createExecutorBackend(
         }
 
         return wrapSourceValue(
-          fql`(${sourceValue})?.[${fql([JSON.stringify(prop.toString())])}]`,
+          getWrappedValueProp(sourceValue, prop),
           async () => Reflect.get((await getValue()) as any, prop),
         );
       },
@@ -341,138 +394,182 @@ export default function createExecutorBackend(
           ["[", ...new Array(queries.length - 1).fill(","), "]"],
           ...queries.map((q) => fql`{${q}}`),
         );
-        return (await runQuery(client, combinedQuery, executionArgs)).data;
+        return (
+          (await runQuery(
+            client,
+            combinedQuery,
+            executionArgs,
+          )) as QuerySuccess<any>
+        ).data;
       } catch (e) {
         if (!(e instanceof ServiceError)) {
           throw e;
         }
 
-        console.log(e.queryInfo, e.constraint_failures);
+        console.log(e.queryInfo?.summary ?? e.queryInfo, e.constraint_failures);
 
         throw new GraphQLError(e.code, { originalError: e });
       }
     },
     isDeferredValue: (value: unknown): value is Query => {
-      return isExpr(value);
+      return isExpr(value) || isV4Expr(value);
     },
     wrapSourceValue,
     isWrappedValue,
     unwrapResolvedValue: unwrapValue,
     expandChildren: (
       path: Path,
-      returnType: GraphQLOutputType,
-      value: Query,
-      fieldNodes: readonly FieldNode[],
+      parentValue: Query,
+      parentType: GraphQLCompositeOutputType,
+      fieldNodes: Map<GraphQLObjectType, readonly FieldNode[]>,
       setDeferred: (data: Query) => void,
-      suppressArrayHandling?: boolean,
+      args: ExecutionArgs,
     ) => {
-      const varName = pathToArray(path).join("_");
-      const dataContainer: Record<string, any> = {};
+      const varName = pathToIdent(path);
 
-      if (isNonNullType(returnType)) {
-        returnType = returnType.ofType;
-      }
+      const containerStack: Array<typeof nonnull | typeof list> = [];
 
-      let getDeferred: () => Query;
-      if (!suppressArrayHandling && isListType(returnType)) {
-        getDeferred = () =>
-          fql`let ${fql([varName + "_"])}:Any=${fql(["", ""], value)};${safeMap(varName + "_", fql`(${fql([varName])})=>{${chainVarErrorOrNull(varName, dataContainerAsQuery(dataContainer))}}`)}`;
-      } else {
-        getDeferred = () =>
-          fql`let ${fql([varName])}:Any=${fql(["", ""], value)};${chainVarErrorOrNull(varName, dataContainerAsQuery(dataContainer))}`;
-      }
-
-      if (isListType(returnType)) {
-        returnType = returnType.ofType;
-        path = addPath(path, "[]", undefined);
-      }
-
-      if (isNonNullType(returnType)) {
-        returnType = returnType.ofType;
-      }
-
-      // if (fieldNodes.length === 1 && fieldNodes[0].name.value === "id") {
-      //   // TODO: handle other types of IDs
-      //   return [
-      //     {
-      //       fieldNode: fieldNodes[0],
-      //       path: addPath(path, "id", "ID"),
-      //       sourceValue:
-      //     }
-      //   ]
-      // }
-
-      return fieldNodes.map((fieldNode) => {
-        const key = (fieldNode.alias ?? fieldNode.name).value;
-        return {
-          fieldNode,
-          path,
-          sourceValue: fql([varName]),
-          setData: (data) => {
-            dataContainer[key] = unwrapValue(data);
-            setDeferred(getDeferred());
-          },
-        };
-      });
-    },
-    expandAbstractType: (
-      schema,
-      path,
-      deferredValue,
-      abstractType,
-      handleArray,
-      setDeferred,
-      executionArgs,
-    ) => {
-      let concreteTypes: readonly GraphQLObjectType[];
-      if (abstractType instanceof GraphQLInterfaceType) {
-        concreteTypes = findImplementors(schema, abstractType);
-      } else {
-        concreteTypes = abstractType.getTypes();
-      }
-
-      const varName = "__" + pathToArray(path).join("_");
-      const varNameType = varName + "__typename";
-
-      const branches: Record<string, Query> = {};
-      const getDeferred = () => {
-        let expr: QueryInput = null;
-        if (Object.entries(branches).length) {
-          expr = fql(
-            [
-              "if(" + varNameType + "==",
-              "){",
-              ...new Array(Object.keys(branches).length - 1)
-                .fill(["}else if(" + varNameType + "==", "){"])
-                .flat(),
-              "}else null",
-            ],
-            ...Object.entries(branches).flat(),
-          );
+      // unwrap all non-null and list types
+      while (isNonNullType(parentType) || isListType(parentType)) {
+        if (isNonNullType(parentType)) {
+          containerStack.push(nonnull);
+          // merge multiple non-nulls into one
+          while (isNonNullType(parentType)) {
+            parentType = parentType.ofType;
+          }
         }
 
-        expr = chainVarErrorOrNull(
-          varName,
-          fql`let ${fql([varNameType])}={${resolveType(abstractType, fql([varName]), executionArgs)}};if(${varIsErrorExpr(varNameType)})${fql([varNameType])} else {let ${fql([varName + "_result"])}:Any={${expr}};${chainVarErrorOrNull(varName + "_result", fql`Object.assign(${fql([varName + "_result"])}, {__typename:${fql([varNameType])}})`)}}`,
+        if (isListType(parentType)) {
+          containerStack.push(list);
+          parentType = parentType.ofType as GraphQLCompositeOutputType;
+        }
+      }
+
+      let wrapQuery = (query: Query) => query;
+      let nullable = true;
+      let innerVarName = varName;
+      while (containerStack.length) {
+        const container = containerStack.pop();
+        switch (container) {
+          case nonnull:
+            nullable = false;
+            break;
+          case list:
+            {
+              const newVarName = `${innerVarName}_`;
+              wrapQuery = (
+                (innerVarNameSaved, wrapQuerySaved, nullableSaved) => (query) =>
+                  safeMap(
+                    `${newVarName}`,
+                    fql(
+                      [`(${innerVarNameSaved})=>`, ""],
+                      chainVarErrorOrNull(
+                        innerVarNameSaved,
+                        wrapQuerySaved(query),
+                        nullableSaved,
+                      ),
+                    ),
+                  )
+              )(innerVarName, wrapQuery, nullable);
+              innerVarName = newVarName;
+              nullable = true;
+              path = addPath(path, "[]", undefined);
+            }
+
+            break;
+        }
+      }
+
+      wrapQuery = (
+        (wrapQuerySaved) => (query) =>
+          fql(
+            [`let ${innerVarName}:Any=`, ";", ""],
+            parentValue,
+            chainVarErrorOrNull(innerVarName, wrapQuerySaved(query), nullable),
+          )
+      )(wrapQuery);
+
+      const constParentType = parentType;
+      if (isObjectType(constParentType)) {
+        const dataContainer: Record<string, any> = {};
+        const getQuery = () => dataContainerAsQuery(dataContainer);
+
+        return fieldNodes
+          .get(constParentType)!
+          .map((fieldNode): ExpandedChild => {
+            const key = (fieldNode.alias ?? fieldNode.name).value;
+            return {
+              concreteType: constParentType,
+              fieldNode,
+              path,
+              sourceValue: fql([varName]),
+              setData: (data) => {
+                dataContainer[key] = unwrapValue(data);
+                setDeferred(wrapQuery(getQuery()));
+              },
+            };
+          });
+      }
+
+      const branches: Record<string, Record<string, any>> = {};
+      const getQuery = () => {
+        const varNameType = `${varName}__typename`;
+        return fql(
+          [
+            `let ${varNameType}={`,
+            "};if(",
+            `)${varNameType} else{let ${varName}_result:Any={`,
+            "};",
+            "}",
+          ],
+          unwrapValue(
+            resolveType(
+              constParentType,
+              wrapSourceValue(fql([varName]), () =>
+                Promise.resolve(fql([varName])),
+              ),
+              args,
+            ),
+          ),
+          varIsErrorExpr(varNameType),
+          Object.entries(branches).length
+            ? fql(
+                [
+                  ...Object.keys(branches).map(
+                    (concreteTypeName, i) =>
+                      `${i > 0 ? "}else " : ""}if(${varNameType}==${JSON.stringify(concreteTypeName)}){`,
+                  ),
+                  "}else null",
+                ],
+                ...Object.values(branches).map(dataContainerAsQuery),
+              )
+            : fql`null`,
+          chainVarErrorOrNull(
+            `${varName}_result`,
+            fql([
+              `Object.assign(${varName}_result, {__typename:${varNameType}})`,
+            ]),
+          ),
         );
-
-        if (!handleArray) {
-          return fql`let ${fql([varName])}={${deferredValue}};${expr}`;
-        }
-
-        return fql`let ${fql([varName + "_"])}:Any={${deferredValue}};${safeMap(varName + "_", fql`(${fql([varName])})=>{${expr}}`)}`;
       };
 
-      const sourceValue = fql([varName]);
-      return concreteTypes.map((concreteType) => ({
-        concreteType,
-        sourceValue,
-        setDeferred: (expr) => {
-          branches[concreteType.name] = expr;
-          setDeferred(getDeferred());
+      return Array.from(fieldNodes.entries()).flatMap(
+        ([concreteType, onFieldNodes]) => {
+          return onFieldNodes.map((fieldNode): ExpandedChild => {
+            const key = (fieldNode.alias ?? fieldNode.name).value;
+            return {
+              fieldNode,
+              concreteType,
+              path,
+              sourceValue: fql([varName]),
+              setData: (data) => {
+                (branches[concreteType.name] ??= {})[key] = unwrapValue(data);
+                setDeferred(wrapQuery(getQuery()));
+              },
+            };
+          });
         },
-        suppressArrayHandling: true,
-      }));
+      );
     },
     getErrorMessage(value) {
       return (value as any)?.["@error"] ?? null;
